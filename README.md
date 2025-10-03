@@ -108,6 +108,8 @@ When you create your PPPoE connection in Windows, you can save your username and
 - Credentials are stored securely by Windows
 - Faster execution
 
+**Note:** Due to Windows security restrictions, the script cannot display the saved username (it will show "Using saved Windows credentials"). This is normal and expected behavior.
+
 ### Method 2: Use External Credentials File (Recommended for Development)
 Create a `credentials.ps1` file in the same directory as the script:
 
@@ -138,6 +140,22 @@ You can pass credentials directly to the script:
 
 ### Method 4: Hybrid Approach
 The script is smart - if you provide some parameters but not others, it will use what you provide and fall back to saved credentials for the rest.
+
+## Why Can't We Extract Saved Credentials?
+
+**Short Answer:** Windows security restrictions prevent it.
+
+**Technical Details:**
+- Windows stores PPPoE credentials in encrypted form for security
+- Modern Windows versions use Windows Credential Manager with strong encryption
+- Microsoft doesn't provide public APIs to extract saved PPPoE credentials
+- This is intentional security-by-design to protect user credentials
+
+**What This Means:**
+- ✅ The script can **use** saved credentials for connections
+- ❌ The script **cannot display** the saved username
+- ✅ This is **normal and expected** behavior
+- ✅ Your credentials are **secure** and protected
 
 ## Script Parameters
 

@@ -70,10 +70,7 @@ try {
     $Health = Add-Health $Health 'PPPoE connections configured' "OK ($($pppoeConnections.Count) found: $($pppoeConnections -join ', '))" 2
     
     # [2.5] Check for credentials immediately after finding connections
-    Write-Log "[DEBUG] Attempting to retrieve saved credentials for: $PppoeName"
-    $savedUsername = Get-SavedPppoeUsername -PppoeName $PppoeName
-    
-    # Check for external credentials file
+    # Check for external credentials file first
     $credentialsFile = Join-Path $here "credentials.ps1"
     if (Test-Path $credentialsFile) {
       try {
@@ -90,34 +87,18 @@ try {
           $Health = Add-Health $Health 'Credentials source' "OK (Loaded from credentials.ps1 for: $UserName)" 3
           Write-Log "Loaded credentials from file for user: $UserName"
         } else {
-          Write-Log "[DEBUG] Credentials file exists but values are empty/null, falling back to saved credentials"
-          # Fall through to saved credentials logic
-          if ($savedUsername) {
-            $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 3
-            Write-Log "Using saved credentials for user: $savedUsername"
-          } else {
-            $Health = Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)' 3
-            Write-Log "Using saved credentials (username not accessible)"
-          }
+          Write-Log "[DEBUG] Credentials file exists but values are empty/null, will use saved Windows credentials"
+          $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
+          Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
         }
       } catch {
         Write-Log "[WARN] Failed to load credentials from file: $($_.Exception.Message)"
-        # Fall through to saved credentials logic
-        if ($savedUsername) {
-          $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 3
-          Write-Log "Using saved credentials for user: $savedUsername"
-        } else {
-          $Health = Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)' 3
-          Write-Log "Using saved credentials (username not accessible)"
-        }
+        $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
+        Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
       }
-    } elseif ($savedUsername) {
-      $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 3
-      Write-Log "Found saved credentials for user: $savedUsername"
     } else {
-      $Health = Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)' 3
-      Write-Log "Using saved credentials (username not accessible)"
-      Write-Log "[DEBUG] Credential detection failed - will attempt connection with saved credentials anyway"
+      $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
+      Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
     }
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
