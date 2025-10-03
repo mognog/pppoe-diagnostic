@@ -122,6 +122,7 @@ $PPPoE_ConnectionName = 'Rise PPPoE'
 - Credentials are never committed to Git (file is in .gitignore)
 - Easy to update without modifying the main script
 - Can be shared securely outside of version control
+- **Smart fallback**: If the file exists but has empty values, it automatically falls back to saved Windows credentials
 
 ### Method 3: Provide Credentials as Parameters
 You can pass credentials directly to the script:

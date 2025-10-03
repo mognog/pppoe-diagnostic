@@ -79,19 +79,30 @@ try {
       try {
         Write-Log "[DEBUG] Found credentials file, loading external credentials"
         . $credentialsFile
-        if ($PPPoE_Username -and $PPPoE_Password) {
+        # Check if credentials are actually provided (not null or empty)
+        if ($PPPoE_Username -and $PPPoE_Password -and 
+            $PPPoE_Username.Trim() -ne '' -and $PPPoE_Password.Trim() -ne '') {
           $UserName = $PPPoE_Username
           $Password = $PPPoE_Password
-          if ($PPPoE_ConnectionName) {
+          if ($PPPoE_ConnectionName -and $PPPoE_ConnectionName.Trim() -ne '') {
             $PppoeName = $PPPoE_ConnectionName
           }
           $Health = Add-Health $Health 'Credentials source' "OK (Loaded from credentials.ps1 for: $UserName)" 3
           Write-Log "Loaded credentials from file for user: $UserName"
         } else {
-          throw "Credentials file exists but no valid credentials found"
+          Write-Log "[DEBUG] Credentials file exists but values are empty/null, falling back to saved credentials"
+          # Fall through to saved credentials logic
+          if ($savedUsername) {
+            $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 3
+            Write-Log "Using saved credentials for user: $savedUsername"
+          } else {
+            $Health = Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)' 3
+            Write-Log "Using saved credentials (username not accessible)"
+          }
         }
       } catch {
         Write-Log "[WARN] Failed to load credentials from file: $($_.Exception.Message)"
+        # Fall through to saved credentials logic
         if ($savedUsername) {
           $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 3
           Write-Log "Using saved credentials for user: $savedUsername"
