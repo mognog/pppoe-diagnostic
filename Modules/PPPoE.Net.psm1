@@ -61,27 +61,24 @@ function Get-SavedPppoeUsername {
   }
   
   try {
-    # Method 2: Check Windows Credential Manager
-    $credPaths = @(
-      "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains",
-      "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections"
-    )
-    
-    foreach ($credPath in $credPaths) {
-      if (Test-Path $credPath) {
-        $entries = Get-ChildItem $credPath -ErrorAction SilentlyContinue
-        foreach ($entry in $entries) {
-          if ($entry.Name -match [regex]::Escape($PppoeName) -or $entry.Name -eq $PppoeName) {
-            $username = Get-ItemProperty -Path $entry.PSPath -Name "Username" -ErrorAction SilentlyContinue
-            if ($username -and $username.Username) {
-              return $username.Username
+    # Method 2: Check Windows Credential Manager via cmdkey
+    $cmdkeyOutput = & cmdkey /list 2>$null
+    if ($cmdkeyOutput) {
+      $lines = $cmdkeyOutput -split "`n"
+      foreach ($line in $lines) {
+        if ($line -match [regex]::Escape($PppoeName) -or $line -match "rasdial" -or $line -match "pppoe") {
+          # Found a credential entry that might be related
+          if ($line -match "Target:\s*(.+)") {
+            $target = $matches[1].Trim()
+            if ($target -match "(.+)@(.+)") {
+              return $matches[1]  # Extract username part
             }
           }
         }
       }
     }
   } catch {
-    # Credential manager method failed
+    # cmdkey method failed
   }
   
   try {
