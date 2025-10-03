@@ -30,38 +30,73 @@ function Get-SavedPppoeUsername {
   param([string]$PppoeName)
   
   try {
-    # Use rasphone to get connection details
-    $rasphoneOutput = & rasphone -s "$PppoeName" 2>$null
-    if ($rasphoneOutput) {
-      # Parse the output to extract username
-      # rasphone output format varies, but we can look for common patterns
-      $lines = $rasphoneOutput -split "`n"
-      foreach ($line in $lines) {
-        if ($line -match 'User\s*name\s*:\s*(.+)' -or $line -match 'Username\s*:\s*(.+)' -or $line -match 'User\s*:\s*(.+)') {
-          return $matches[1].Trim()
-        }
-      }
-    }
-  } catch {
-    # If rasphone fails, try alternative method
-  }
-  
-  try {
-    # Alternative: Check registry for saved credentials
-    $regPath = "HKCU:\Software\Microsoft\RAS Phonebook"
-    if (Test-Path $regPath) {
-      $entries = Get-ChildItem $regPath -ErrorAction SilentlyContinue
-      foreach ($entry in $entries) {
-        if ($entry.Name -match [regex]::Escape($PppoeName)) {
-          $username = Get-ItemProperty -Path $entry.PSPath -Name "Username" -ErrorAction SilentlyContinue
-          if ($username) {
-            return $username.Username
+    # Method 1: Check registry for saved credentials (primary method)
+    $regPaths = @(
+      "HKCU:\Software\Microsoft\RAS Phonebook",
+      "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections",
+      "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections"
+    )
+    
+    foreach ($regPath in $regPaths) {
+      if (Test-Path $regPath) {
+        $entries = Get-ChildItem $regPath -ErrorAction SilentlyContinue
+        foreach ($entry in $entries) {
+          if ($entry.Name -match [regex]::Escape($PppoeName)) {
+            # Try different property names that might contain the username
+            $usernameProps = @("Username", "User", "UserName", "User Name")
+            foreach ($prop in $usernameProps) {
+              $username = Get-ItemProperty -Path $entry.PSPath -Name $prop -ErrorAction SilentlyContinue
+              if ($username -and $username.$prop) {
+                return $username.$prop
+              }
+            }
           }
         }
       }
     }
   } catch {
-    # Registry method also failed
+    # Registry method failed
+  }
+  
+  try {
+    # Method 2: Check Windows Credential Manager via registry
+    $credPaths = @(
+      "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Domains",
+      "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections"
+    )
+    
+    foreach ($credPath in $credPaths) {
+      if (Test-Path $credPath) {
+        $entries = Get-ChildItem $credPath -ErrorAction SilentlyContinue
+        foreach ($entry in $entries) {
+          if ($entry.Name -match [regex]::Escape($PppoeName)) {
+            $username = Get-ItemProperty -Path $entry.PSPath -Name "Username" -ErrorAction SilentlyContinue
+            if ($username -and $username.Username) {
+              return $username.Username
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    # Credential manager method failed
+  }
+  
+  try {
+    # Method 3: Use netsh to validate connection exists (doesn't show username)
+    $netshOutput = & netsh interface show interface 2>$null
+    if ($netshOutput) {
+      $lines = $netshOutput -split "`n"
+      foreach ($line in $lines) {
+        if ($line -match [regex]::Escape($PppoeName)) {
+          # Connection exists but we can't get username from netsh
+          # Return a generic indicator that saved credentials exist
+          return "[Saved credentials found]"
+        }
+      }
+    }
+  } catch {
+    # netsh method failed
   }
   
   return $null

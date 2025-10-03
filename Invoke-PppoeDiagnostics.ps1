@@ -46,7 +46,7 @@ try {
 
   # [2] Check for existing PPPoE connections
   $pppoeConnections = @()
-  $testConnections = @('Rise PPPoE', 'PPPoE', 'Broadband Connection')
+  $testConnections = @('Rise PPPoE', 'PPPoE', 'Broadband Connection', 'Ransomeware_6G 2')
   
   foreach ($connName in $testConnections) {
     try {
@@ -70,6 +70,14 @@ try {
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
     $Health['PPPoE connections configured'] = 'WARN (none found)'
+    Write-Log "[DEBUG] Tested connection names: $($testConnections -join ', ')"
+    Write-Log "[DEBUG] Available network connections:"
+    try {
+      $allConnections = Get-NetConnectionProfile | Select-Object -ExpandProperty Name
+      Write-Log "[DEBUG] $($allConnections -join ', ')"
+    } catch {
+      Write-Log "[DEBUG] Could not retrieve network connections list"
+    }
   }
 
   # [3] NIC selection
