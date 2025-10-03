@@ -26,6 +26,47 @@ function Ensure-LinkUp {
   return $true
 }
 
+function Get-SavedPppoeUsername {
+  param([string]$PppoeName)
+  
+  try {
+    # Use rasphone to get connection details
+    $rasphoneOutput = & rasphone -s "$PppoeName" 2>$null
+    if ($rasphoneOutput) {
+      # Parse the output to extract username
+      # rasphone output format varies, but we can look for common patterns
+      $lines = $rasphoneOutput -split "`n"
+      foreach ($line in $lines) {
+        if ($line -match 'User\s*name\s*:\s*(.+)' -or $line -match 'Username\s*:\s*(.+)' -or $line -match 'User\s*:\s*(.+)') {
+          return $matches[1].Trim()
+        }
+      }
+    }
+  } catch {
+    # If rasphone fails, try alternative method
+  }
+  
+  try {
+    # Alternative: Check registry for saved credentials
+    $regPath = "HKCU:\Software\Microsoft\RAS Phonebook"
+    if (Test-Path $regPath) {
+      $entries = Get-ChildItem $regPath -ErrorAction SilentlyContinue
+      foreach ($entry in $entries) {
+        if ($entry.Name -match [regex]::Escape($PppoeName)) {
+          $username = Get-ItemProperty -Path $entry.PSPath -Name "Username" -ErrorAction SilentlyContinue
+          if ($username) {
+            return $username.Username
+          }
+        }
+      }
+    }
+  } catch {
+    # Registry method also failed
+  }
+  
+  return $null
+}
+
 function Disconnect-PPP {
   param([string]$PppoeName)
   try { rasdial "$PppoeName" /disconnect | Out-Null } catch {}

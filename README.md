@@ -146,7 +146,7 @@ The tool generates a comprehensive health summary showing the status of each dia
 [2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
 [3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
 [4] Ethernet link state ................. OK (Up)
-[5] Credentials source .................. WARN (Using saved credentials)
+[5] Credentials source .................. OK (Using saved credentials for: user@isp.com)
 [6] PPPoE authentication ................ FAIL (691 bad credentials)
 [7] PPP interface present ............... FAIL (not created)
 [8] PPP IPv4 assignment ................. FAIL (no non-APIPA IPv4)
@@ -201,7 +201,12 @@ OVERALL: OK
 
 ### Credential Management
 - The tool first tries to use saved credentials from your Windows PPPoE connection
+- When using saved credentials, the tool will display the username being used (password is never shown)
 - If saved credentials fail or don't exist, you can provide them manually using the `-UserName` and `-Password` parameters
+- The health summary will show which credential method is being used:
+  - `"OK (Using saved credentials for: user@isp.com)"` - Found and using saved credentials
+  - `"OK (Supplied at runtime)"` - Using credentials provided as parameters
+  - `"WARN (Using saved credentials - username not retrievable)"` - Using saved credentials but couldn't retrieve username
 - Common authentication errors:
   - **691**: Bad username or password
   - **692**: Hardware failure in modem or network adapter

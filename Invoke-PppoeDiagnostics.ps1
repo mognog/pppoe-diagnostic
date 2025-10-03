@@ -115,9 +115,17 @@ try {
   $useSaved = $false
   if ([string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($Password)) {
     $useSaved = $true
-    Add-Health $Health 'Credentials source' 'WARN (Using saved credentials)'
+    $savedUsername = Get-SavedPppoeUsername -PppoeName $PppoeName
+    if ($savedUsername) {
+      Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)"
+      Write-Log "Found saved credentials for user: $savedUsername"
+    } else {
+      Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)'
+      Write-Log "Using saved credentials (username not accessible)"
+    }
   } else {
     Add-Health $Health 'Credentials source' 'OK (Supplied at runtime)'
+    Write-Log "Using provided credentials for user: $UserName"
   }
 
   # Connect
