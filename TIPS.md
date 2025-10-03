@@ -1,0 +1,289 @@
+# PPPoE Diagnostic Toolkit - Tips & Troubleshooting
+
+## ✅ DEFINITELY WORKS
+
+### Basic Usage
+```cmd
+# Right-click Run-Diagnostics.cmd → Run as administrator
+# OR run directly in PowerShell 7:
+pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1"
+```
+
+### PowerShell Script Structure
+```powershell
+# CORRECT: param() block must be at the top (after #Requires)
+#Requires -Version 7.0
+
+param(
+  [string]$PppoeName = 'PPPoE',
+  [string]$UserName,
+  [string]$Password,
+  [string]$TargetAdapter,
+  [switch]$FullLog,
+  [switch]$SkipWifiToggle,
+  [switch]$KeepPPP
+)
+
+# Rest of script...
+```
+
+### CMD File Structure (Working)
+```cmd
+@echo off
+echo PPPoE Diagnostic Toolkit v11
+echo =============================
+echo.
+
+:: Change to the directory where this script is located
+cd /d "%~dp0"
+echo Working directory: %CD%
+echo.
+
+where pwsh >nul 2>&1
+if errorlevel 1 (
+  echo ERROR: PowerShell 7 not found
+  pause
+  exit /b 1
+)
+
+echo Running diagnostics...
+pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1"
+echo.
+echo Press any key to close...
+pause >nul
+```
+
+### Line Endings Fix
+```powershell
+# Convert Unix (LF) to Windows (CRLF) line endings:
+(Get-Content file.ps1 -Raw) -replace "`n", "`r`n" | Set-Content file-fixed.ps1
+```
+
+### Module Loading
+```powershell
+# These work reliably:
+Import-Module "$here/Modules/PPPoE.Core.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Net.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Logging.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Health.psm1" -Force
+```
+
+### Safe Array Indexing
+```powershell
+# CORRECT: Check array existence and count before indexing
+if ($array -and $array.Count -gt 0) { 
+  $firstItem = $array[0] 
+} else { 
+  $firstItem = $null 
+}
+
+# CORRECT: Safe property access on potentially null objects
+$route = Get-NetRoute ... | Select-Object -First 1
+$nextHop = if ($route) { $route.NextHop } else { $null }
+```
+
+## ❌ DEFINITELY DOESN'T WORK
+
+### PowerShell Script Issues
+```powershell
+# WRONG: param() block after other code
+Set-StrictMode -Version Latest
+param([string]$UserName)  # ❌ This will fail
+
+# WRONG: Set-StrictMode -Version Latest with optional parameters
+Set-StrictMode -Version Latest  # ❌ Causes "variable not set" errors
+
+# WRONG: Complex delayed expansion in CMD
+set "VAR=value"
+echo !VAR!  # ❌ Can cause "was was unexpected at this time"
+```
+
+### CMD File Issues
+```cmd
+# WRONG: Complex PowerShell command with delayed expansion
+powershell -Command "Start-Process -FilePath '!PWSH!' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','""!PS1!""' -WorkingDirectory '""!SCRIPT_DIR!""' -Verb RunAs"
+
+# WRONG: Unix line endings in .cmd files
+# File with LF (0A) instead of CRLF (0D 0A) causes batch errors
+```
+
+### File Encoding Issues
+```powershell
+# WRONG: UTF-8 with BOM in PowerShell scripts
+# Can cause parameter parsing issues
+
+# WRONG: Mixed line endings
+# Some lines CRLF, others LF - causes parsing errors
+```
+
+## 🔧 COMMON FIXES
+
+### "was was unexpected at this time"
+- **Cause**: Unix line endings in .cmd files or complex delayed expansion
+- **Fix**: Convert to Windows line endings: `(Get-Content file.cmd -Raw) -replace "`n", "`r`n" | Set-Content file.cmd`
+- **Alternative**: Simplify the CMD file structure
+
+### "The argument 'Invoke-PppoeDiagnostics.ps1' is not recognized as the name of a script file"
+- **Cause**: CMD file running from wrong directory (usually C:\Windows\System32\ when run as admin)
+- **Fix**: Add `cd /d "%~dp0"` at the beginning of CMD file to change to script's directory
+- **Prevention**: Always include directory change in CMD files that reference other files
+
+### "The variable '$UserName' cannot be retrieved because it has not been set"
+- **Cause**: `Set-StrictMode -Version Latest` with optional parameters
+- **Fix**: Use `Set-StrictMode -Version 3.0` or comment out strict mode entirely
+- **Alternative**: Move param() block to very top of script
+
+### "Cannot index into a null array"
+- **Cause**: Array indexing without checking if array exists and has elements
+- **Fix**: Always check array existence and count before indexing: `if ($array -and $array.Count -gt 0) { $array[0] }`
+- **Common locations**: `Get-RecommendedAdapter`, `Get-PppInterface` functions
+
+### "The term 'param' is not recognized"
+- **Cause**: param() block not at the beginning of script
+- **Fix**: Move param() block right after #Requires statement
+
+### PowerShell 7 Not Found
+- **Cause**: pwsh.exe not in PATH
+- **Fix**: Install PowerShell 7 from Microsoft Store or GitHub releases
+- **Check**: `where pwsh` should return a path
+
+### Module Import Warnings
+```powershell
+# This warning is harmless but can be suppressed:
+WARNING: The names of some imported commands from the module 'PPPoE.Net' include unapproved verbs
+# Fix: Add -WarningAction SilentlyContinue to Import-Module calls
+```
+
+## 🚀 PERFORMANCE TIPS
+
+### Faster Execution
+```powershell
+# Use -NoProfile for faster startup
+pwsh -NoProfile -ExecutionPolicy Bypass -File "script.ps1"
+
+# Skip verbose logging unless needed
+.\Invoke-PppoeDiagnostics.ps1  # Default: concise logs
+.\Invoke-PppoeDiagnostics.ps1 -FullLog  # Verbose logs
+```
+
+### Memory Management
+```powershell
+# The script automatically:
+# - Cleans up PPP connections
+# - Restores adapter states
+# - Disposes transcript writers
+# - Exits cleanly
+```
+
+## 📁 FILE STRUCTURE REQUIREMENTS
+
+```
+pppoe-diagnostic-v11a/
+├── Invoke-PppoeDiagnostics.ps1  # Main script (CRLF line endings)
+├── Run-Diagnostics.cmd          # Launcher (CRLF line endings)
+├── Modules/
+│   ├── PPPoE.Core.psm1          # Core functions
+│   ├── PPPoE.Net.psm1           # Network operations
+│   ├── PPPoE.Logging.psm1       # Logging helpers
+│   └── PPPoE.Health.psm1        # Health checks
+├── logs/                        # Auto-created
+│   └── pppoe_transcript_*.txt   # Output logs
+└── tools/
+    └── Normalize-Ascii.ps1      # ASCII normalizer
+```
+
+## 🎯 QUICK DEBUGGING
+
+### Test Components Individually
+```cmd
+# Test CMD file:
+.\Run-Diagnostics.cmd
+
+# Test PowerShell script directly:
+pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1"
+
+# Test modules:
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Import-Module '.\Modules\PPPoE.Core.psm1' -Force; Write-Host 'OK'"
+```
+
+### Check File Encoding
+```powershell
+# Check line endings:
+Get-Content file.ps1 -Raw | Format-Hex | Select-Object -First 5
+
+# Should show 0D 0A (CRLF) for Windows files
+# 0A only (LF) indicates Unix line endings - convert with fix above
+```
+
+### Verify PowerShell Version
+```powershell
+# Check version:
+$PSVersionTable.PSVersion
+
+# Should be 7.x or higher
+# Script requires #Requires -Version 7.0
+```
+
+## 📋 TROUBLESHOOTING CHECKLIST
+
+1. **File Issues**
+   - [ ] Line endings are CRLF (Windows format)
+   - [ ] No UTF-8 BOM in PowerShell files
+   - [ ] param() block at top of PowerShell script
+   - [ ] Set-StrictMode commented out or set to 3.0
+
+2. **Environment Issues**
+   - [ ] PowerShell 7+ installed (`where pwsh` works)
+   - [ ] Running as Administrator (for network operations)
+   - [ ] Execution policy allows scripts
+
+3. **Network Issues**
+   - [ ] Ethernet adapter detected
+   - [ ] No competing network connections
+   - [ ] PPPoE credentials available (saved or provided)
+
+4. **Script Issues**
+   - [ ] All modules in Modules/ directory
+   - [ ] logs/ directory exists (auto-created)
+   - [ ] No syntax errors in PowerShell scripts
+
+## 🔍 LOG ANALYSIS
+
+### Health Summary Interpretation
+```
+=== HEALTH SUMMARY (ASCII) ===
+[1] PowerShell version .................. OK (7.5.3)
+[2] Adapter detected/ready .............. OK (Realtek USB 5GbE @ 1 Gbps)
+[3] Ethernet link state ................. OK (Up)
+[4] Credentials source .................. WARN (Using saved credentials)
+[5] PPPoE authentication ................ FAIL (691 bad credentials)
+[6] PPP interface present ............... FAIL (not created)
+OVERALL: FAIL
+```
+
+**Key indicators:**
+- `OK` = Working correctly
+- `WARN` = Works but not ideal (e.g., using saved credentials)
+- `FAIL` = Problem that needs attention
+- `N/A` = Skipped due to earlier failure
+
+### Common Error Codes
+- **691**: Bad username/password
+- **651**: Modem/device error
+- **619**: Port disconnected
+- **678**: No answer from server (no PADO)
+
+## 💡 BEST PRACTICES
+
+1. **Always test with minimal parameters first**
+2. **Use -SkipWifiToggle during development**
+3. **Check logs/ directory for detailed transcripts**
+4. **Run as Administrator for full network access**
+5. **Keep scripts in dedicated directory with proper structure**
+6. **Use version control for script changes**
+7. **Test on clean Windows installations when possible**
+
+---
+
+*Last updated: October 2025*
+*Version: v11a (Fixed line endings and script structure)*
