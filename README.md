@@ -1,76 +1,117 @@
 
-# PPPoE Diagnostic Toolkit (v11a)
+# PPPoE Diagnostic Toolkit
 
-A provider‑agnostic PowerShell 7+ toolkit to test Windows PPPoE end‑to‑end and produce an **ASCII‑only transcript** that's safe to send to ISP support.
+A comprehensive PowerShell 7+ toolkit to test Windows PPPoE connections end-to-end and produce an **ASCII-only transcript** that's safe to send to ISP support.
 
-## Highlights (v11a)
+## What This Tool Does
 
-- **✅ FIXED**: Line ending issues that caused CMD file failures
-- **✅ FIXED**: PowerShell script parameter parsing issues
-- **✅ FIXED**: Health summary logic and null array indexing errors
-- **✅ ENHANCED**: PPPoE connection detection (finds existing connections even when disconnected)
-- **✅ ENHANCED**: Dual ping tests (1.1.1.1 and 8.8.8.8) for comprehensive connectivity validation
-- **Stage‑by‑stage Health Summary** (each step shows PASS/FAIL/WARN).
-- **Robust "connected" check**: authenticated PPP interface must exist, have a non‑APIPA IP, and (optionally) be the default route.
-- **Link‑state gate**: don't even try PPP if NIC is down/0 bps.
-- **Credential clarity**: shows if we used saved vs supplied creds; maps rasdial errors (e.g., 691).
-- **Public‑IP class detection**: Public / Private RFC1918 / CGNAT 100.64/10 / APIPA; warns on CGNAT ("works but not ideal for inbound").
-- **Provider‑agnostic** (no hardcoded ISP names).
-- **Safe restore** of adapters & clean disconnect.
-- **ASCII‑only transcript**.
+This diagnostic tool helps you troubleshoot PPPoE (Point-to-Point Protocol over Ethernet) internet connections on Windows. It performs a complete health check of your PPPoE setup and generates a detailed report that you can share with your ISP's technical support.
 
-## Structure
+### Key Features
+
+- **Complete PPPoE Health Check**: Tests every aspect of your PPPoE connection from physical adapter to internet connectivity
+- **Stage-by-stage Health Summary**: Each step shows PASS/FAIL/WARN status with detailed explanations
+- **Robust Connection Validation**: Ensures authenticated PPP interface exists with proper IP assignment and routing
+- **Link-state Validation**: Won't attempt PPP connection if your network adapter is down or has no link
+- **Credential Management**: Shows whether saved or supplied credentials were used; maps authentication errors
+- **Public IP Detection**: Identifies Public/Private/CGNAT/APIPA IP addresses with appropriate warnings
+- **Provider-agnostic**: Works with any ISP - no hardcoded provider names
+- **Safe Operation**: Automatically restores network adapters and cleanly disconnects after testing
+- **ASCII-only Output**: Generates clean, text-only transcripts safe for sharing with support teams
+
+## Prerequisites
+
+Before using this tool, you need to set up a PPPoE connection on your Windows system:
+
+### 1. Create a PPPoE Connection
+
+1. **Open Network & Internet Settings**:
+   - Press `Windows + I` to open Settings
+   - Go to **Network & Internet** → **Dial-up**
+
+2. **Add a new connection**:
+   - Click **"Add a VPN connection"** or **"Set up a new connection"**
+   - Choose **"Connect to the Internet"** → **"Broadband (PPPoE)"**
+
+3. **Configure the connection**:
+   - **User name**: Your ISP username (usually in format like `user@domain.com` or `user@isp.com`)
+   - **Password**: Your ISP password
+   - **Connection name**: Give it a name like "My ISP PPPoE" or "Rise PPPoE"
+   - **Allow other people to use this connection**: Check this box if you want other users to access it
+
+4. **Save the connection** - it will appear in your network connections list
+
+### 2. Requirements
+
+- **Windows 10/11** with PowerShell 7+ installed
+- **Administrator privileges** (required for network adapter operations)
+- **Ethernet connection** to your modem/router
+- **PPPoE credentials** from your ISP
+
+## Quick Start
+
+### Option 1: Easy Launch (Recommended)
+1. **Right-click** `Run-Diagnostics.cmd` → **"Run as administrator"**
+2. The script will automatically launch with PowerShell 7+ and run the diagnostics
+
+### Option 2: Manual PowerShell Launch
+Open PowerShell 7+ as Administrator and run:
+```powershell
+.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'YourPPPoEConnectionName' -FullLog
+```
+
+### Option 3: With Credentials (if needed)
+If the tool can't find your saved credentials, provide them manually:
+```powershell
+.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'YourPPPoEConnectionName' -UserName 'your_username@isp.com' -Password 'your_password' -FullLog
+```
+
+## Project Structure
 
 ```
-pppoe-diagnostic-v11a/
-├── Invoke-PppoeDiagnostics.ps1       # Main entry script
-├── Run-Diagnostics.cmd               # Admin + PowerShell 7 launcher
-├── README.md                         # This file
+pppoe-diagnostic/
+├── Invoke-PppoeDiagnostics.ps1       # Main diagnostic script
+├── Run-Diagnostics.cmd               # Easy launcher (run as admin)
+├── README.md                         # This guide
 ├── TIPS.md                           # Troubleshooting & best practices
 ├── Modules/
-│   ├── PPPoE.Core.psm1               # Transcript, ASCII normaliser, helpers
-│   ├── PPPoE.Net.psm1                # NIC/PPP operations
-│   ├── PPPoE.Logging.psm1            # Banners, logging helpers
-│   └── PPPoE.Health.psm1             # Health checks & summary builder
+│   ├── PPPoE.Core.psm1               # Core functionality and helpers
+│   ├── PPPoE.Net.psm1                # Network adapter operations
+│   ├── PPPoE.Logging.psm1            # Logging and output formatting
+│   └── PPPoE.Health.psm1             # Health checks and validation
 ├── tools/
-│   └── Normalize-Ascii.ps1           # Stub ASCII normaliser (pass‑through)
-└── logs/
+│   └── Normalize-Ascii.ps1           # Text formatting utilities
+└── logs/                             # Diagnostic transcripts (excluded from Git)
     └── pppoe_transcript_<timestamp>.txt
 ```
 
-## Quick start
+## Script Parameters
 
-1) Right‑click `Run-Diagnostics.cmd` → **Run as administrator**.  
-   (It now works reliably and relaunches in **PowerShell 7+** with elevation if needed.)
+The main diagnostic script accepts several parameters:
 
-**Or** run manually in PowerShell 7:
-```powershell
-.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'PPPoE' -UserName 'svc_xxx@isp' -Password 'secret' -FullLog
-```
+- **`-PppoeName`** (default: `PPPoE`) – Name of your Windows PPPoE connection
+- **`-UserName`** / **`-Password`** – Optional; if not provided, the script tries to use saved credentials
+- **`-TargetAdapter`** – Optional network adapter name; auto-selects if omitted
+- **`-FullLog`** – Include verbose diagnostic information in the output
+- **`-SkipWifiToggle`** – Skip Wi-Fi adapter toggling (useful if you don't have Wi-Fi)
+- **`-KeepPPP`** – Keep the PPP connection active after testing (useful for further troubleshooting)
 
-**Troubleshooting**: See `TIPS.md` for common issues and solutions.
+## Understanding the Results
 
-### Parameters (main script)
+The tool generates a comprehensive health summary showing the status of each diagnostic step. Here's what to look for:
 
-- `-PppoeName` (default: `PPPoE`) – Windows dial‑up connection name
-- `-UserName` / `-Password` – optional; if not provided we try saved credentials
-- `-TargetAdapter` – optional NIC alias; auto‑selects if omitted
-- `-FullLog` – include verbose dumps
-- `-SkipWifiToggle` – don’t toggle Wi‑Fi
-- `-KeepPPP` – don’t disconnect at the end (for post checks)
-
-## Example Health Summary (ASCII)
+### Example: Failed Connection (Authentication Issue)
 
 ```
 === HEALTH SUMMARY (ASCII) ===
 [1] PowerShell version .................. OK (7.5.3)
-[2] PPPoE connections configured ........ OK (1 found: Rise PPPoE)
+[2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
 [3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
 [4] Ethernet link state ................. OK (Up)
 [5] Credentials source .................. WARN (Using saved credentials)
 [6] PPPoE authentication ................ FAIL (691 bad credentials)
 [7] PPP interface present ............... FAIL (not created)
-[8] PPP IPv4 assignment ................. FAIL (no non‑APIPA IPv4)
+[8] PPP IPv4 assignment ................. FAIL (no non-APIPA IPv4)
 [9] Default route via PPP ............... FAIL (still via 192.168.55.1)
 [10] Public IP classification ........... N/A
 [11] Gateway reachability ............... N/A
@@ -80,12 +121,14 @@ pppoe-diagnostic-v11a/
 OVERALL: FAIL
 ```
 
-On success:
+**What this means**: The connection failed at step 6 with error 691, which typically means incorrect username/password. You'll need to update your credentials.
+
+### Example: Successful Connection
 
 ```
 === HEALTH SUMMARY (ASCII) ===
 [1] PowerShell version .................. OK (7.5.3)
-[2] PPPoE connections configured ........ OK (1 found: Rise PPPoE)
+[2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
 [3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
 [4] Ethernet link state ................. OK (Up)
 [5] Credentials source .................. OK (Supplied at runtime)
@@ -101,28 +144,69 @@ On success:
 OVERALL: OK
 ```
 
-## Notes
+**What this means**: Everything is working perfectly! Your PPPoE connection is established and you have full internet connectivity.
 
-- **CGNAT (100.64.0.0/10)** is flagged as `WARN` (works, but inbound services/port‑forwarding not viable).
-- **Private RFC1918** on PPP is also `WARN/FAIL` depending on context.
-- Logs are **ASCII‑normalized** to avoid Unicode issues in plain‑text.
-- **PPPoE connection detection**: Automatically finds existing PPPoE connections (e.g., "Rise PPPoE") even when disconnected.
-- **Dual ping tests**: Tests connectivity to both 1.1.1.1 (Cloudflare) and 8.8.8.8 (Google DNS) for comprehensive validation.
-- **v11a fixes**: Resolved line ending issues, PowerShell script parameter parsing problems, health summary logic, and null array indexing errors.
+### Status Indicators
+
+- **OK**: Step completed successfully
+- **FAIL**: Critical issue that prevents connection
+- **WARN**: Non-critical issue that may affect performance
+- **N/A**: Step not applicable (usually because previous steps failed)
+
+## Important Notes
+
+### IP Address Classifications
+- **Public IP**: Normal internet connection with full connectivity
+- **CGNAT (100.64.0.0/10)**: Carrier-grade NAT - works for outbound connections but inbound services/port-forwarding may not work
+- **Private RFC1918**: Private network IP - may indicate configuration issues
+- **APIPA (169.254.x.x)**: Automatic private IP - usually indicates connection failure
+
+### Credential Management
+- The tool first tries to use saved credentials from your Windows PPPoE connection
+- If saved credentials fail or don't exist, you can provide them manually using the `-UserName` and `-Password` parameters
+- Common authentication errors:
+  - **691**: Bad username or password
+  - **692**: Hardware failure in modem or network adapter
+  - **718**: Authentication timeout
+
+### Output Files
+- Diagnostic transcripts are saved in the `logs/` folder with timestamps
+- All output is ASCII-normalized to avoid Unicode issues when sharing with support teams
+- The tool automatically cleans up network connections after testing
 
 ## Troubleshooting
 
 For detailed troubleshooting information, common issues, and best practices, see **[TIPS.md](TIPS.md)**.
 
-### Quick Fixes
-- **CMD file closes immediately**: Usually a line ending issue - see TIPS.md
-- **PowerShell parameter errors**: Ensure param() block is at the top of script
-- **"was was unexpected at this time"**: Unix line endings in CMD file - convert to Windows format
-- **"script file not recognized"**: CMD file running from wrong directory - ensure `cd /d "%~dp0"` is included
+### Common Issues and Quick Fixes
 
-### Current Testing Status
-- **✅ PPPoE connection detection**: Successfully detects existing connections
-- **✅ Physical adapter detection**: Works with various USB Ethernet adapters
-- **✅ Link state validation**: Correctly identifies when cable is disconnected
-- **✅ Health summary logic**: Proper FAIL/OK status reporting
-- **🔄 Full connectivity test**: Ready for testing with ISP connection
+**"Script file not recognized" or CMD file closes immediately**:
+- Make sure you're running as Administrator
+- Ensure the script files are in the same directory
+- Check that PowerShell 7+ is installed
+
+**"PowerShell parameter errors"**:
+- Ensure you're using PowerShell 7+ (not Windows PowerShell 5.1)
+- Check that parameter names match exactly (case-sensitive)
+
+**"691 bad credentials" error**:
+- Verify your ISP username and password are correct
+- Try updating your saved credentials in Windows Network settings
+- Contact your ISP to confirm your account is active
+
+**"No PPPoE connections found"**:
+- Make sure you've created a PPPoE connection in Windows Network settings
+- Check that the connection name matches what you're specifying with `-PppoeName`
+
+**"Physical adapter not detected"**:
+- Ensure your Ethernet cable is connected
+- Check that your network adapter is enabled in Device Manager
+- Try a different Ethernet cable or port
+
+## Getting Help
+
+If you're still having issues:
+1. Check the detailed logs in the `logs/` folder
+2. Review the troubleshooting guide in `TIPS.md`
+3. Share the diagnostic transcript with your ISP's technical support
+4. Open an issue on this GitHub repository with your diagnostic output
