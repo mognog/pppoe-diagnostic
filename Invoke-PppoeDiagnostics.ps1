@@ -123,6 +123,7 @@ try {
   $useSaved = $false
   if ([string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($Password)) {
     $useSaved = $true
+    Write-Log "[DEBUG] Attempting to retrieve saved credentials for: $PppoeName"
     $savedUsername = Get-SavedPppoeUsername -PppoeName $PppoeName
     if ($savedUsername) {
       Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)"
@@ -130,6 +131,7 @@ try {
     } else {
       Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)'
       Write-Log "Using saved credentials (username not accessible)"
+      Write-Log "[DEBUG] Credential detection failed - will attempt connection with saved credentials anyway"
     }
   } else {
     Add-Health $Health 'Credentials source' 'OK (Supplied at runtime)'
