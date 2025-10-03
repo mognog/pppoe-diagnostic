@@ -32,16 +32,17 @@ try {
 
   $Health = New-Health
 
-  # Initialize health entries in logical order
-  Add-Health $Health 'PowerShell version' ''
-  Add-Health $Health 'PPPoE connections configured' ''
-  Add-Health $Health 'Physical adapter detected' ''
+  # Define health check order for logical grouping
+  # Order 1-5: Basic system checks
+  # Order 6-10: Network adapter and link checks  
+  # Order 11-15: PPPoE connection and authentication
+  # Order 16-20: Connectivity tests (grouped together)
 
   # [1] PowerShell 7+
   if (Test-PwshVersion7Plus) {
-    $Health['PowerShell version'] = "OK ($($PSVersionTable.PSVersion))"
+    $Health = Add-Health $Health 'PowerShell version' "OK ($($PSVersionTable.PSVersion))" 1
   } else {
-    $Health['PowerShell version'] = "FAIL ($($PSVersionTable.PSVersion))"
+    $Health = Add-Health $Health 'PowerShell version' "FAIL ($($PSVersionTable.PSVersion))" 1
   }
 
   # [2] Check for existing PPPoE connections
@@ -66,10 +67,10 @@ try {
   
   if ($pppoeConnections.Count -gt 0) {
     Write-Ok "Found existing PPPoE connections: $($pppoeConnections -join ', ')"
-    $Health['PPPoE connections configured'] = "OK ($($pppoeConnections.Count) found: $($pppoeConnections -join ', '))"
+    $Health = Add-Health $Health 'PPPoE connections configured' "OK ($($pppoeConnections.Count) found: $($pppoeConnections -join ', '))" 2
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
-    $Health['PPPoE connections configured'] = 'WARN (none found)'
+    $Health = Add-Health $Health 'PPPoE connections configured' 'WARN (none found)' 2
     Write-Log "[DEBUG] Tested connection names: $($testConnections -join ', ')"
     Write-Log "[DEBUG] Available network connections:"
     try {
@@ -89,32 +90,31 @@ try {
 
   if ($null -eq $nic) {
     Write-Err "No Ethernet adapters detected"
-    $Health['Physical adapter detected'] = 'FAIL (none found)'
+    $Health = Add-Health $Health 'Physical adapter detected' 'FAIL (none found)' 3
     throw "No adapter"
   } else {
     Write-Ok "Selected adapter: $($nic.Name) / $($nic.InterfaceDescription) @ $($nic.LinkSpeed)"
-    $Health['Physical adapter detected'] = "OK ($($nic.InterfaceDescription) @ $($nic.LinkSpeed))"
+    $Health = Add-Health $Health 'Physical adapter detected' "OK ($($nic.InterfaceDescription) @ $($nic.LinkSpeed))" 3
   }
 
   # [4] Link state gate
   if (Ensure-LinkUp -AdapterName $nic.Name) {
-    Add-Health $Health 'Ethernet link state' 'OK (Up)'
+    $Health = Add-Health $Health 'Ethernet link state' 'OK (Up)' 4
   } else {
     Write-Err "Ethernet link is down (0 bps / Disconnected)"
-    Add-Health $Health 'Ethernet link state' 'FAIL (Down)'
-    # Skip PPP attempt if link is down
-    Add-Health $Health 'Credentials source' 'N/A'
-    Add-Health $Health 'PPPoE authentication' 'N/A'
-    Add-Health $Health 'PPP interface present' 'N/A'
-    Add-Health $Health 'PPP IPv4 assignment' 'N/A'
-    Add-Health $Health 'Default route via PPP' 'N/A'
-    Add-Health $Health 'Public IP classification' 'N/A'
-    Add-Health $Health 'Gateway reachability' 'N/A'
-    Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A'
-    Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A'
-    Add-Health $Health 'MTU probe (DF)' 'N/A'
-    Write-HealthSummary -Health $Health
-    return
+    $Health = Add-Health $Health 'Ethernet link state' 'FAIL (Down)' 4
+    # Skip PPP attempt if link is down - set all remaining checks to N/A
+    $Health = Add-Health $Health 'Credentials source' 'N/A' 11
+    $Health = Add-Health $Health 'PPPoE authentication' 'N/A' 12
+    $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
+    $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
+    $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15
+    $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
+    $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
+    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
+    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
+    $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
+    # Don't return early - let the script continue to show the complete health summary
   }
 
   # Clean previous PPP state
@@ -126,15 +126,15 @@ try {
     Write-Log "[DEBUG] Attempting to retrieve saved credentials for: $PppoeName"
     $savedUsername = Get-SavedPppoeUsername -PppoeName $PppoeName
     if ($savedUsername) {
-      Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)"
+      $Health = Add-Health $Health 'Credentials source' "OK (Using saved credentials for: $savedUsername)" 11
       Write-Log "Found saved credentials for user: $savedUsername"
     } else {
-      Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)'
+      $Health = Add-Health $Health 'Credentials source' 'WARN (Using saved credentials - username not retrievable)' 11
       Write-Log "Using saved credentials (username not accessible)"
       Write-Log "[DEBUG] Credential detection failed - will attempt connection with saved credentials anyway"
     }
   } else {
-    Add-Health $Health 'Credentials source' 'OK (Supplied at runtime)'
+    $Health = Add-Health $Health 'Credentials source' 'OK (Supplied at runtime)' 11
     Write-Log "Using provided credentials for user: $UserName"
   }
 
@@ -146,8 +146,10 @@ try {
 
   # Map rasdial errors
   $authOk = $false
-  if ($res.Success) { $authOk = $true ; Add-Health $Health 'PPPoE authentication' 'OK' }
-  else {
+  if ($res.Success) { 
+    $authOk = $true 
+    $Health = Add-Health $Health 'PPPoE authentication' 'OK' 12
+  } else {
     $reason = switch ($res.Code) {
       691 { '691 bad credentials' }
       651 { '651 modem (device) error' }
@@ -155,7 +157,7 @@ try {
       678 { '678 no answer (no PADO)' }
       default { "code $($res.Code)" }
     }
-    Add-Health $Health 'PPPoE authentication' ("FAIL ($reason)")
+    $Health = Add-Health $Health 'PPPoE authentication' ("FAIL ($reason)") 12
   }
 
   # Validate PPP interface materialization
@@ -166,40 +168,40 @@ try {
   if ($authOk) {
     $pppIf = Get-PppInterface -PppoeName $PppoeName
     if ($pppIf -and $pppIf.ConnectionState -eq 'Connected') {
-      Add-Health $Health 'PPP interface present' ("OK (IfIndex $($pppIf.InterfaceIndex), '$($pppIf.InterfaceAlias)')")
+      $Health = Add-Health $Health 'PPP interface present' ("OK (IfIndex $($pppIf.InterfaceIndex), '$($pppIf.InterfaceAlias)')") 13
       $pppIP = Get-PppIPv4 -IfIndex $pppIf.InterfaceIndex
       if ($pppIP) {
-        Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))")
+        $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))") 14
       } else {
-        Add-Health $Health 'PPP IPv4 assignment' ("FAIL (no non-APIPA IPv4)")
+        $Health = Add-Health $Health 'PPP IPv4 assignment' ("FAIL (no non-APIPA IPv4)") 14
       }
 
       $defViaPPP = Test-DefaultRouteVia -IfIndex $pppIf.InterfaceIndex
       if ($defViaPPP) {
-        Add-Health $Health 'Default route via PPP' 'OK'
+        $Health = Add-Health $Health 'Default route via PPP' 'OK' 15
       } else {
-        Add-Health $Health 'Default route via PPP' 'WARN (still via other interface)'
+        $Health = Add-Health $Health 'Default route via PPP' 'WARN (still via other interface)' 15
       }
     } else {
-      Add-Health $Health 'PPP interface present' 'FAIL (not created/connected)'
-      Add-Health $Health 'PPP IPv4 assignment' 'FAIL (no interface)'
-      Add-Health $Health 'Default route via PPP' 'FAIL (no interface)'
+      $Health = Add-Health $Health 'PPP interface present' 'FAIL (not created/connected)' 13
+      $Health = Add-Health $Health 'PPP IPv4 assignment' 'FAIL (no interface)' 14
+      $Health = Add-Health $Health 'Default route via PPP' 'FAIL (no interface)' 15
     }
   } else {
-    Add-Health $Health 'PPP interface present' 'N/A'
-    Add-Health $Health 'PPP IPv4 assignment' 'N/A'
-    Add-Health $Health 'Default route via PPP' 'N/A'
+    $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
+    $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
+    $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15
   }
 
   # Public IP classification & gateway reachability
   if ($pppIP) {
     $cls = Get-IpClass -IPv4 $pppIP.IPAddress
     switch ($cls) {
-      'PUBLIC' { Add-Health $Health 'Public IP classification' 'OK (Public)' }
-      'CGNAT'  { Add-Health $Health 'Public IP classification' 'WARN (CGNAT 100.64/10)' }
-      'PRIVATE'{ Add-Health $Health 'Public IP classification' 'WARN (Private RFC1918)' }
-      'APIPA'  { Add-Health $Health 'Public IP classification' 'FAIL (APIPA)' }
-      default  { Add-Health $Health 'Public IP classification' "WARN ($cls)" }
+      'PUBLIC' { $Health = Add-Health $Health 'Public IP classification' 'OK (Public)' 16 }
+      'CGNAT'  { $Health = Add-Health $Health 'Public IP classification' 'WARN (CGNAT 100.64/10)' 16 }
+      'PRIVATE'{ $Health = Add-Health $Health 'Public IP classification' 'WARN (Private RFC1918)' 16 }
+      'APIPA'  { $Health = Add-Health $Health 'Public IP classification' 'FAIL (APIPA)' 16 }
+      default  { $Health = Add-Health $Health 'Public IP classification' "WARN ($cls)" 16 }
     }
 
     # Gateway (peer) reachability: ping default gateway of PPP if present
@@ -209,34 +211,34 @@ try {
     $gw = if ($route) { $route.NextHop } else { $null }
     if ($gw) {
       $okGw = Test-PingHost -TargetName $gw -Count 2 -TimeoutMs 1000 -Source $pppIP.IPAddress
-      if ($okGw) { Add-Health $Health 'Gateway reachability' 'OK' }
-      else { Add-Health $Health 'Gateway reachability' 'FAIL (unreachable)' }
+      if ($okGw) { $Health = Add-Health $Health 'Gateway reachability' 'OK' 17 }
+      else { $Health = Add-Health $Health 'Gateway reachability' 'FAIL (unreachable)' 17 }
     } else {
-      Add-Health $Health 'Gateway reachability' 'WARN (no default route record)'
+      $Health = Add-Health $Health 'Gateway reachability' 'WARN (no default route record)' 17
     }
 
-    # External ping via PPP
+    # External ping via PPP (grouped together)
     $ok11 = Test-PingHost -TargetName '1.1.1.1' -Count 2 -TimeoutMs 1000 -Source $pppIP.IPAddress
-    Add-Health $Health 'Ping (1.1.1.1) via PPP' ($ok11 ? 'OK' : 'FAIL')
+    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' ($ok11 ? 'OK' : 'FAIL') 18
     
     $ok88 = Test-PingHost -TargetName '8.8.8.8' -Count 2 -TimeoutMs 1000 -Source $pppIP.IPAddress
-    Add-Health $Health 'Ping (8.8.8.8) via PPP' ($ok88 ? 'OK' : 'FAIL')
+    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' ($ok88 ? 'OK' : 'FAIL') 19
 
     # MTU probe (rough)
     # We try payload 1472 with DF; if success -> ~1492 MTU on PPP
     try {
       $ping = Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop
-      Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)'
+      $Health = Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)' 20
     } catch {
-      Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)'
+      $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
     }
 
   } else {
-    Add-Health $Health 'Public IP classification' 'N/A'
-    Add-Health $Health 'Gateway reachability' 'N/A'
-    Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A'
-    Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A'
-    Add-Health $Health 'MTU probe (DF)' 'N/A'
+    $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
+    $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
+    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
+    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
+    $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
   }
 
 } catch {

@@ -4,26 +4,36 @@
 Set-StrictMode -Version Latest
 
 function New-Health {
-  [ordered]@{}
+  @()
 }
 
 function Add-Health {
-  param($Health, [string]$Key, [string]$Value)
-  $Health[$Key] = $Value
+  param($Health, [string]$Key, [string]$Value, [int]$Order = 0)
+  $healthItem = [PSCustomObject]@{
+    Order = $Order
+    Key = $Key
+    Value = $Value
+  }
+  $Health = $Health + $healthItem
+  return $Health
 }
 
 function Write-HealthSummary {
-  param([hashtable]$Health)
+  param([array]$Health)
   Write-Log "=== HEALTH SUMMARY (ASCII) ==="
-  $i=1
-  foreach ($k in $Health.Keys) {
-    $v = $Health[$k]
-    $dots = '.' * [Math]::Max(1, 28 - $k.Length)
-    Write-Log ("[{0}] {1} {2} {3}" -f $i, $k, $dots, $v)
+  
+  # Sort by order, then by key for consistent display
+  $sortedHealth = $Health | Sort-Object Order, Key
+  
+  $i = 1
+  foreach ($item in $sortedHealth) {
+    $dots = '.' * [Math]::Max(1, 28 - $item.Key.Length)
+    Write-Log ("[{0}] {1} {2} {3}" -f $i, $item.Key, $dots, $item.Value)
     $i++
   }
-  $hasFail = ($Health.Values | Where-Object { $_ -match 'FAIL' })
-  $hasWarn = ($Health.Values | Where-Object { $_ -match 'WARN' })
+  
+  $hasFail = ($Health | Where-Object { $_.Value -match 'FAIL' })
+  $hasWarn = ($Health | Where-Object { $_.Value -match 'WARN' })
   $overall = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
   Write-Log ("OVERALL: {0}" -f $overall)
 }
