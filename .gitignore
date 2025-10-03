@@ -1,6 +1,12 @@
 # Logs folder - contains diagnostic transcripts
 logs/
 
+# Credential files - NEVER commit these!
+credentials.ps1
+*.credentials.ps1
+config.ps1
+*.config.ps1
+
 # Windows specific
 Thumbs.db
 ehthumbs.db

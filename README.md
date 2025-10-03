@@ -108,7 +108,22 @@ When you create your PPPoE connection in Windows, you can save your username and
 - Credentials are stored securely by Windows
 - Faster execution
 
-### Method 2: Provide Credentials as Parameters
+### Method 2: Use External Credentials File (Recommended for Development)
+Create a `credentials.ps1` file in the same directory as the script:
+
+```powershell
+# Copy credentials.ps1.example to credentials.ps1 and edit it
+$PPPoE_Username = 'your_username@isp.com'
+$PPPoE_Password = 'your_password_here'
+$PPPoE_ConnectionName = 'Rise PPPoE'
+```
+
+**Advantages:**
+- Credentials are never committed to Git (file is in .gitignore)
+- Easy to update without modifying the main script
+- Can be shared securely outside of version control
+
+### Method 3: Provide Credentials as Parameters
 You can pass credentials directly to the script:
 
 ```powershell
@@ -120,7 +135,7 @@ You can pass credentials directly to the script:
 - Saved credentials are incorrect
 - You want to avoid saving credentials in Windows
 
-### Method 3: Hybrid Approach
+### Method 4: Hybrid Approach
 The script is smart - if you provide some parameters but not others, it will use what you provide and fall back to saved credentials for the rest.
 
 ## Script Parameters
