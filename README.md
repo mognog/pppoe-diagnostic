@@ -61,10 +61,17 @@ Open PowerShell 7+ as Administrator and run:
 ```
 
 ### Option 3: With Credentials (if needed)
-If the tool can't find your saved credentials, provide them manually:
+If the tool can't find your saved credentials or you want to test with different credentials, provide them manually:
 ```powershell
 .\Invoke-PppoeDiagnostics.ps1 -PppoeName 'YourPPPoEConnectionName' -UserName 'your_username@isp.com' -Password 'your_password' -FullLog
 ```
+
+### Option 4: Using Saved Credentials Only (Recommended)
+If you've already saved your credentials in the Windows PPPoE connection, you can simply run:
+```powershell
+.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'YourPPPoEConnectionName' -FullLog
+```
+The script will automatically use the saved credentials from your Windows connection.
 
 ## Project Structure
 
@@ -84,6 +91,37 @@ pppoe-diagnostic/
 └── logs/                             # Diagnostic transcripts (excluded from Git)
     └── pppoe_transcript_<timestamp>.txt
 ```
+
+## Credential Management
+
+The script offers flexible credential handling to suit different scenarios:
+
+### Method 1: Use Saved Credentials (Recommended)
+When you create your PPPoE connection in Windows, you can save your username and password. The script will automatically use these saved credentials:
+
+```powershell
+.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'MyISP' -FullLog
+```
+
+**Advantages:**
+- No need to type credentials each time
+- Credentials are stored securely by Windows
+- Faster execution
+
+### Method 2: Provide Credentials as Parameters
+You can pass credentials directly to the script:
+
+```powershell
+.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'MyISP' -UserName 'user@isp.com' -Password 'mypassword' -FullLog
+```
+
+**Use this when:**
+- Testing with different credentials
+- Saved credentials are incorrect
+- You want to avoid saving credentials in Windows
+
+### Method 3: Hybrid Approach
+The script is smart - if you provide some parameters but not others, it will use what you provide and fall back to saved credentials for the rest.
 
 ## Script Parameters
 
@@ -192,6 +230,7 @@ For detailed troubleshooting information, common issues, and best practices, see
 **"691 bad credentials" error**:
 - Verify your ISP username and password are correct
 - Try updating your saved credentials in Windows Network settings
+- Test with credentials provided directly: `.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'YourConnection' -UserName 'user@isp.com' -Password 'password' -FullLog`
 - Contact your ISP to confirm your account is active
 
 **"No PPPoE connections found"**:
