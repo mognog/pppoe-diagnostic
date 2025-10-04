@@ -236,19 +236,22 @@ if ($pesterAvailable) {
     }
     
     # Summary
-    Write-Host "`n📊 Test Results Summary:" -ForegroundColor Cyan
-    Write-Host "✅ Passed: $($testResults.Passed)" -ForegroundColor Green
-    Write-Host "❌ Failed: $($testResults.Failed)" -ForegroundColor Red
-    Write-Host "📈 Total: $($testResults.Passed + $testResults.Failed)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Test Results Summary:" -ForegroundColor Cyan
+    Write-Host "Passed: $($testResults.Passed)" -ForegroundColor Green
+    Write-Host "Failed: $($testResults.Failed)" -ForegroundColor Red
+    Write-Host "Total: $($testResults.Passed + $testResults.Failed)" -ForegroundColor Yellow
     
     if ($testResults.Failed -gt 0) {
-        Write-Host "`n❌ Failed Tests:" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Failed Tests:" -ForegroundColor Red
         $testResults.Tests | Where-Object { $_.Status -eq "FAIL" } | ForEach-Object {
             Write-Host "  - $($_.Name): $($_.Result)" -ForegroundColor Red
         }
         exit 1
     } else {
-        Write-Host "`n🎉 All tests passed!" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "All tests passed!" -ForegroundColor Green
         exit 0
     }
 }

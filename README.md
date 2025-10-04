@@ -298,6 +298,35 @@ This shows the first attempt failed (possibly due to session timeout), but the s
 - All output is ASCII-normalized to avoid Unicode issues when sharing with support teams
 - The tool automatically cleans up network connections after testing
 
+## Testing
+
+The PPPoE Diagnostic Toolkit includes a comprehensive test suite with **16 test files** and **200+ individual tests** covering all modules, error handling, security, and edge cases.
+
+### Quick Test Commands
+
+```powershell
+# Run all tests
+.\Tests\Run-Tests.ps1
+
+# Run with detailed output
+.\Tests\Run-Tests.ps1 -Detailed
+
+# Run specific test categories
+.\Tests\Run-Tests.ps1 -TestFiles @("PPPoE.Security.Tests.ps1", "PPPoE.ErrorHandling.Tests.ps1")
+```
+
+### Test Coverage
+
+- **Core Functions** - All utility and helper functions
+- **Network Operations** - Adapter management, PPPoE connections, connectivity testing
+- **Configuration** - Settings management and validation
+- **Security** - Credential handling and input validation
+- **Error Handling** - Edge cases, null inputs, and failure scenarios
+- **Integration** - Cross-module interactions and workflows
+- **Performance** - Execution time and memory usage validation
+
+For detailed testing information, test writing guidelines, and troubleshooting test issues, see **[Tests/TESTING-GUIDE.md](Tests/TESTING-GUIDE.md)**.
+
 ## Troubleshooting
 
 For detailed troubleshooting information, common issues, and best practices, see **[TIPS.md](TIPS.md)**.
