@@ -177,11 +177,17 @@ function Connect-PPPWithFallback {
   
   # All attempts failed
   & $WriteLog "FAILED: All credential attempts failed"
-  & $AddHealth 'Credentials source' 'FAIL (All credential methods failed)' 3
   
-  # Use the last result if available, otherwise create a default failure result
-  $lastCode = if ($result -and $result.Code) { $result.Code } else { -1 }
-  $lastOutput = if ($result -and $result.Output) { $result.Output } else { "No connection attempts succeeded" }
+  # Use the last result if available and it's a hashtable, otherwise create a default failure result
+  $lastCode = -1
+  $lastOutput = "No connection attempts succeeded"
+  
+  if ($result -and $result -is [hashtable] -and $result.ContainsKey('Code')) {
+    $lastCode = $result.Code
+  }
+  if ($result -and $result -is [hashtable] -and $result.ContainsKey('Output')) {
+    $lastOutput = $result.Output
+  }
   
   return @{ 
     Success = $false; 

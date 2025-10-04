@@ -89,12 +89,12 @@ try {
     }
   }
   
+  # Set credentials file path regardless of whether connections are found
+  $credentialsFile = Join-Path $here "credentials.ps1"
+  
   if ($pppoeConnections.Count -gt 0) {
     Write-Ok "Found existing PPPoE connections: $($pppoeConnections -join ', ')"
     $Health = Add-Health $Health 'PPPoE connections configured' "OK ($($pppoeConnections.Count) found: $($pppoeConnections -join ', '))" 2
-    
-    # [2.5] Credentials will be handled during connection attempt with fallback logic
-    $credentialsFile = Join-Path $here "credentials.ps1"
     Write-Log "Credential sources available: Windows saved, credentials.ps1 file, script parameters"
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
@@ -286,6 +286,45 @@ try {
       $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
     }
 
+    # Traceroute diagnostics (may take up to ~60s each)
+    Write-Log "Starting traceroute to 1.1.1.1 (may take up to 60s)..."
+    try {
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = "cmd.exe"
+      $psi.Arguments = "/c tracert -d -4 -w 1000 -h 20 1.1.1.1"
+      $psi.RedirectStandardOutput = $true
+      $psi.UseShellExecute = $false
+      $proc = [System.Diagnostics.Process]::Start($psi)
+      while (-not $proc.StandardOutput.EndOfStream) {
+        $line = $proc.StandardOutput.ReadLine()
+        Write-Log "[tracert 1.1.1.1] $line"
+      }
+      $proc.WaitForExit()
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'DONE' 21
+    } catch {
+      Write-Log "Traceroute 1.1.1.1 error: $($_.Exception.Message)"
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'ERROR' 21
+    }
+
+    Write-Log "Starting traceroute to 8.8.8.8 (may take up to 60s)..."
+    try {
+      $psi2 = New-Object System.Diagnostics.ProcessStartInfo
+      $psi2.FileName = "cmd.exe"
+      $psi2.Arguments = "/c tracert -d -4 -w 1000 -h 20 8.8.8.8"
+      $psi2.RedirectStandardOutput = $true
+      $psi2.UseShellExecute = $false
+      $proc2 = [System.Diagnostics.Process]::Start($psi2)
+      while (-not $proc2.StandardOutput.EndOfStream) {
+        $line2 = $proc2.StandardOutput.ReadLine()
+        Write-Log "[tracert 8.8.8.8] $line2"
+      }
+      $proc2.WaitForExit()
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'DONE' 22
+    } catch {
+      Write-Log "Traceroute 8.8.8.8 error: $($_.Exception.Message)"
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'ERROR' 22
+    }
+
   } else {
     if (-not $linkDown) {
       # Link is up but no PPP interface/IP
@@ -294,6 +333,8 @@ try {
       $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
       $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
       $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'N/A' 21
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'N/A' 22
     }
   }
 
