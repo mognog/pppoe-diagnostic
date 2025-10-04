@@ -97,7 +97,7 @@ function Connect-PPPWithFallback {
         $filePassword = $PPPoE_Password
         $fileConnectionName = if ($PPPoE_ConnectionName -and $PPPoE_ConnectionName.Trim() -ne '') { $PPPoE_ConnectionName } else { $PppoeName }
         
-        & $WriteLog "Attempt 2: Trying credentials from file for user '$fileUserName'"
+        & $WriteLog "Attempt 2: Trying credentials from file for user '$fileUserName' on connection '$fileConnectionName'"
         $result = Connect-PPP -PppoeName $fileConnectionName -UserName $fileUserName -Password $filePassword
         if ($result.Success) {
           & $WriteLog "SUCCESS: Connected using credentials from file"
@@ -144,10 +144,15 @@ function Connect-PPPWithFallback {
   # All attempts failed
   & $WriteLog "FAILED: All credential attempts failed"
   & $AddHealth 'Credentials source' 'FAIL (All credential methods failed)' 3
+  
+  # Use the last result if available, otherwise create a default failure result
+  $lastCode = if ($result -and $result.Code) { $result.Code } else { -1 }
+  $lastOutput = if ($result -and $result.Output) { $result.Output } else { "No connection attempts succeeded" }
+  
   return @{ 
     Success = $false; 
-    Code = $result.Code; 
-    Output = $result.Output; 
+    Code = $lastCode; 
+    Output = $lastOutput; 
     Method = 'None'; 
     CredentialSource = 'No working credentials found' 
   }

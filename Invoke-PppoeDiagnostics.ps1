@@ -58,7 +58,31 @@ try {
       # If we get error 651 (modem error) or similar, the connection exists but can't connect
       if ($output -match 'error (651|619|678|691)') {
         $pppoeConnections += $connName
-        Write-Ok "Found PPPoE connection: $connName (exists but cannot connect - no physical adapter)"
+        
+        # Check if we have a physical adapter and its link state to provide better context
+        $adapterContext = ""
+        try {
+          $testNic = Get-RecommendedAdapter
+          if ($testNic) {
+            if ($testNic.LinkSpeed -eq 0 -or $testNic.Status -ne 'Up') {
+              $adapterContext = " (no physical link)"
+            } else {
+              $adapterContext = " (physical link present)"
+            }
+          }
+        } catch {
+          # Ignore adapter check errors
+        }
+        
+        # Determine the likely cause based on the error code
+        $reason = switch -regex ($output) {
+          'error 651' { 'device/link error' }
+          'error 619' { 'connection timeout' }
+          'error 678' { 'no answer from remote' }
+          'error 691' { 'authentication failed' }
+          default { 'connection issue' }
+        }
+        Write-Ok "Found PPPoE connection: $connName (exists but cannot connect - $reason)$adapterContext"
       }
     } catch {
       # Connection doesn't exist or other error
@@ -126,12 +150,20 @@ try {
 
   # Only attempt PPPoE connection if Ethernet link is up
   if (-not $linkDown) {
+    # Determine the correct connection name to use
+    $connectionNameToUse = $PppoeName
+    if ($pppoeConnections.Count -gt 0) {
+      # If we found existing connections, use the first one (most likely the correct one)
+      $connectionNameToUse = $pppoeConnections[0]
+      Write-Log "Using detected connection name: '$connectionNameToUse'"
+    }
+    
     # Clean previous PPP state
-    Disconnect-PPP -PppoeName $PppoeName
+    Disconnect-PPP -PppoeName $connectionNameToUse
 
     # Connect with fallback credential attempts
     Write-Log "Starting PPPoE connection attempts with fallback credential sources..."
-    $res = Connect-PPPWithFallback -PppoeName $PppoeName -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog ${function:Write-Log} -AddHealth ${function:Add-Health}
+    $res = Connect-PPPWithFallback -PppoeName $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog ${function:Write-Log} -AddHealth ${function:Add-Health}
     $out = ($res.Output -replace '[^\x00-\x7F]', '?')
     Write-Log "Final connection result: Method=$($res.Method), Success=$($res.Success), ExitCode=$($res.Code)"
     Write-Log "rasdial output:`n$out"
@@ -243,6 +275,7 @@ try {
   Write-Err "Fatal error: $($_.Exception.Message)"
 } finally {
   if (-not $KeepPPP) { Disconnect-PPP -PppoeName $PppoeName }
+  Write-Log ""
   Write-HealthSummary -Health $Health
   Write-Log "Transcript saved to $logPath"
   Stop-AsciiTranscript
