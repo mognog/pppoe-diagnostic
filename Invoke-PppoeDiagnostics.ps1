@@ -346,6 +346,57 @@ try {
       $Health = Add-Health $Health 'Interface statistics' 'FAIL (Could not retrieve stats)' 24
     }
 
+    # Advanced Connection Stability Tests
+    Write-Log ""
+    Write-Log "=== ADVANCED CONNECTION STABILITY TESTS ==="
+    Write-Log "These tests will take approximately 15-25 seconds to complete..."
+    
+    # Quick Connectivity Check (catches very intermittent issues)
+    Write-Log "Quick connectivity check..."
+    $quickCheck = Test-QuickConnectivityCheck -TargetIP '1.1.1.1' -WriteLog ${function:Write-Log}
+    if ($quickCheck.SuccessRate -eq 100) {
+      $Health = Add-Health $Health 'Quick connectivity' "OK (100% success)" 25
+    } elseif ($quickCheck.SuccessRate -ge 60) {
+      $Health = Add-Health $Health 'Quick connectivity' "WARN ($($quickCheck.SuccessRate)% success)" 25
+    } else {
+      $Health = Add-Health $Health 'Quick connectivity' "FAIL ($($quickCheck.SuccessRate)% success)" 25
+    }
+    
+    # Connection Jitter Test
+    Write-Log "Testing connection jitter..."
+    $jitterTest = Test-ConnectionJitter -TargetIP '1.1.1.1' -Count 15 -WriteLog ${function:Write-Log}
+    if ($jitterTest.Jitter -le 10) {
+      $Health = Add-Health $Health 'Connection jitter' "OK (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
+    } elseif ($jitterTest.Jitter -le 50) {
+      $Health = Add-Health $Health 'Connection jitter' "WARN (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
+    } else {
+      $Health = Add-Health $Health 'Connection jitter' "FAIL (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
+    }
+
+    # Burst Connectivity Test
+    Write-Log "Testing burst connectivity..."
+    $burstTest = Test-BurstConnectivity -TargetIP '1.1.1.1' -BurstSize 5 -BurstCount 3 -WriteLog ${function:Write-Log}
+    if ($burstTest.AvgBurstSuccess -ge 90) {
+      $Health = Add-Health $Health 'Burst connectivity' "OK (${burstTest.AvgBurstSuccess}% avg success)" 27
+    } elseif ($burstTest.AvgBurstSuccess -ge 70) {
+      $Health = Add-Health $Health 'Burst connectivity' "WARN (${burstTest.AvgBurstSuccess}% avg success)" 27
+    } else {
+      $Health = Add-Health $Health 'Burst connectivity' "FAIL (${burstTest.AvgBurstSuccess}% avg success)" 27
+    }
+
+    # Provider-Specific Diagnostics
+    Write-Log "Running provider-specific diagnostics..."
+    $providerDiagnostics = Test-ProviderSpecificDiagnostics -InterfaceAlias $pppIf.InterfaceAlias -WriteLog ${function:Write-Log}
+    $providerSuccess = ($providerDiagnostics | Where-Object { $_.Status -eq 'OK' }).Count
+    $providerTotal = $providerDiagnostics.Count
+    if ($providerSuccess -eq $providerTotal) {
+      $Health = Add-Health $Health 'Provider diagnostics' "OK (All $providerTotal tests passed)" 28
+    } elseif ($providerSuccess -gt ($providerTotal * 0.7)) {
+      $Health = Add-Health $Health 'Provider diagnostics' "WARN ($providerSuccess/$providerTotal tests passed)" 28
+    } else {
+      $Health = Add-Health $Health 'Provider diagnostics' "FAIL ($providerSuccess/$providerTotal tests passed)" 28
+    }
+
     # Traceroute diagnostics (may take up to ~60s each)
     Write-Log "Starting traceroute to 1.1.1.1 (may take up to 60s)..."
     try {
@@ -360,10 +411,10 @@ try {
         Write-Log "[tracert 1.1.1.1] $line"
       }
       $proc.WaitForExit()
-      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'DONE' 25
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'DONE' 29
     } catch {
       Write-Log "Traceroute 1.1.1.1 error: $($_.Exception.Message)"
-      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'ERROR' 25
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'ERROR' 29
     }
 
     Write-Log "Starting traceroute to 8.8.8.8 (may take up to 60s)..."
@@ -379,10 +430,10 @@ try {
         Write-Log "[tracert 8.8.8.8] $line2"
       }
       $proc2.WaitForExit()
-      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'DONE' 26
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'DONE' 30
     } catch {
       Write-Log "Traceroute 8.8.8.8 error: $($_.Exception.Message)"
-      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'ERROR' 26
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'ERROR' 30
     }
 
     # Optional: Connection Stability Test (60 seconds)
@@ -392,15 +443,15 @@ try {
     if ($stabilityChoice -match '^[yY]') {
       $stabilityTest = Test-ConnectionStability -TargetIP '1.1.1.1' -DurationSeconds 60 -WriteLog ${function:Write-Log}
       if ($stabilityTest.UptimePercent -ge 95) {
-        $Health = Add-Health $Health 'Connection stability' "OK ($($stabilityTest.UptimePercent)% uptime)" 27
+        $Health = Add-Health $Health 'Connection stability' "OK ($($stabilityTest.UptimePercent)% uptime)" 31
       } elseif ($stabilityTest.UptimePercent -ge 90) {
-        $Health = Add-Health $Health 'Connection stability' "WARN ($($stabilityTest.UptimePercent)% uptime)" 27
+        $Health = Add-Health $Health 'Connection stability' "WARN ($($stabilityTest.UptimePercent)% uptime)" 31
       } else {
-        $Health = Add-Health $Health 'Connection stability' "FAIL ($($stabilityTest.UptimePercent)% uptime)" 27
+        $Health = Add-Health $Health 'Connection stability' "FAIL ($($stabilityTest.UptimePercent)% uptime)" 31
       }
     } else {
       Write-Log "Skipping stability test."
-      $Health = Add-Health $Health 'Connection stability' 'SKIP (User declined)' 27
+      $Health = Add-Health $Health 'Connection stability' 'SKIP (User declined)' 31
     }
 
   } else {
@@ -411,8 +462,13 @@ try {
       $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
       $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
       $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
-      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'N/A' 21
-      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'N/A' 22
+      $Health = Add-Health $Health 'Quick connectivity' 'N/A' 25
+      $Health = Add-Health $Health 'Connection jitter' 'N/A' 26
+      $Health = Add-Health $Health 'Burst connectivity' 'N/A' 27
+      $Health = Add-Health $Health 'Provider diagnostics' 'N/A' 28
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'N/A' 29
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'N/A' 30
+      $Health = Add-Health $Health 'Connection stability' 'N/A' 31
     }
   }
 

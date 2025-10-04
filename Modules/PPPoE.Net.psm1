@@ -374,7 +374,8 @@ function Test-PacketLoss {
     Start-Sleep -Milliseconds 100
   }
   
-  $successful = ($results | Where-Object { $_.Success }).Count
+  $successfulResults = $results | Where-Object { $_.Success }
+  $successful = if ($successfulResults) { $successfulResults.Count } else { 0 }
   $lost = $Count - $successful
   $lossPercent = [Math]::Round(($lost / $Count) * 100, 1)
   $avgLatency = if ($successful -gt 0) {
@@ -486,7 +487,8 @@ function Test-ConnectionStability {
     Start-Sleep -Seconds 5
   }
   
-  $successful = ($results | Where-Object { $_.Success }).Count
+  $successfulResults = $results | Where-Object { $_.Success }
+  $successful = if ($successfulResults) { $successfulResults.Count } else { 0 }
   $total = $results.Count
   $uptime = [Math]::Round(($successful / $total) * 100, 1)
   $avgLatency = if ($successful -gt 0) {
@@ -502,6 +504,210 @@ function Test-ConnectionStability {
     AvgLatency = $avgLatency;
     Results = $results 
   }
+}
+
+function Test-ConnectionJitter {
+  param([string]$TargetIP, [int]$Count = 15, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing connection jitter to $TargetIP ($Count packets)..."
+  $results = @()
+  
+  for ($i = 1; $i -le $Count; $i++) {
+    try {
+      $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping) {
+        $results += @{ Packet = $i; Latency = $ping.ResponseTime; Success = $true }
+        & $WriteLog "Packet $($i): OK (${ping.ResponseTime}ms)"
+      }
+    } catch {
+      $results += @{ Packet = $i; Latency = $null; Success = $false }
+      & $WriteLog "Packet $($i): LOST"
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  
+  $successfulResults = $results | Where-Object { $_.Success }
+  $successful = if ($successfulResults) { $successfulResults.Count } else { 0 }
+  $lost = $Count - $successful
+  
+  if ($successful -gt 1) {
+    $latencies = $successfulResults | ForEach-Object { $_.Latency }
+    $avgLatency = [Math]::Round(($latencies | Measure-Object -Average).Average, 1)
+    $minLatency = ($latencies | Measure-Object -Minimum).Minimum
+    $maxLatency = ($latencies | Measure-Object -Maximum).Maximum
+    $jitter = $maxLatency - $minLatency
+    
+    & $WriteLog "Jitter test complete: $successful/$Count packets received, avg: ${avgLatency}ms, jitter: ${jitter}ms (min: ${minLatency}ms, max: ${maxLatency}ms)"
+    
+    return @{
+      TotalPackets = $Count;
+      SuccessfulPackets = $successful;
+      LostPackets = $lost;
+      AvgLatency = $avgLatency;
+      MinLatency = $minLatency;
+      MaxLatency = $maxLatency;
+      Jitter = $jitter;
+      Results = $results
+    }
+  } else {
+    & $WriteLog "Jitter test failed: insufficient successful packets for analysis"
+    return @{
+      TotalPackets = $Count;
+      SuccessfulPackets = $successful;
+      LostPackets = $lost;
+      AvgLatency = 0;
+      MinLatency = 0;
+      MaxLatency = 0;
+      Jitter = 0;
+      Results = $results
+    }
+  }
+}
+
+function Test-BurstConnectivity {
+  param([string]$TargetIP, [int]$BurstSize = 5, [int]$BurstCount = 3, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing burst connectivity to $TargetIP ($BurstCount bursts of $BurstSize packets each)..."
+  $burstResults = @()
+  
+  for ($burst = 1; $burst -le $BurstCount; $burst++) {
+    & $WriteLog "Burst $burst/$BurstCount starting..."
+    $burstSuccess = 0
+    
+    for ($i = 1; $i -le $BurstSize; $i++) {
+      try {
+        $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
+        if ($ping) {
+          $burstSuccess++
+        }
+      } catch {
+        # Packet lost
+      }
+    }
+    
+    $burstPercent = [Math]::Round(($burstSuccess / $BurstSize) * 100, 1)
+    $burstResults += @{ Burst = $burst; Successful = $burstSuccess; Total = $BurstSize; Percent = $burstPercent }
+    & $WriteLog "Burst $burst complete: $burstSuccess/$BurstSize packets received ($burstPercent%)"
+    
+    if ($burst -lt $BurstCount) {
+      Start-Sleep -Seconds 1
+    }
+  }
+  
+  $avgBurstSuccess = [Math]::Round(($burstResults | Measure-Object -Property Percent -Average).Average, 1)
+  $minBurstSuccess = ($burstResults | Measure-Object -Property Percent -Minimum).Minimum
+  $maxBurstSuccess = ($burstResults | Measure-Object -Property Percent -Maximum).Maximum
+  
+  & $WriteLog "Burst test complete: avg success $avgBurstSuccess% (range: $minBurstSuccess% - $maxBurstSuccess%)"
+  
+  return @{
+    BurstResults = $burstResults;
+    AvgBurstSuccess = $avgBurstSuccess;
+    MinBurstSuccess = $minBurstSuccess;
+    MaxBurstSuccess = $maxBurstSuccess;
+    BurstVariability = $maxBurstSuccess - $minBurstSuccess
+  }
+}
+
+function Test-QuickConnectivityCheck {
+  param([string]$TargetIP, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Quick connectivity check (5 rapid tests)..."
+  $results = @()
+  
+  for ($i = 1; $i -le 5; $i++) {
+    try {
+      $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
+      if ($ping) {
+        $results += @{ Test = $i; Success = $true; Latency = $ping.ResponseTime }
+        & $WriteLog "  Test $i: OK (${ping.ResponseTime}ms)"
+      }
+    } catch {
+      $results += @{ Test = $i; Success = $false; Latency = $null }
+      & $WriteLog "  Test $i: FAIL"
+    }
+    Start-Sleep -Milliseconds 50
+  }
+  
+  $successful = ($results | Where-Object { $_.Success }).Count
+  $successRate = [Math]::Round(($successful / 5) * 100, 1)
+  
+  & $WriteLog "Quick check complete: $successful/5 tests passed ($successRate%)"
+  
+  return @{
+    SuccessRate = $successRate;
+    SuccessfulTests = $successful;
+    TotalTests = 5;
+    Results = $results
+  }
+}
+
+function Test-ProviderSpecificDiagnostics {
+  param([string]$InterfaceAlias, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Running provider-specific diagnostics..."
+  $diagnostics = @()
+  
+  # Test common ISP DNS servers
+  $ispDnsTests = @(
+    @{ Name = "Rise Broadband DNS"; Server = "8.8.8.8"; Query = "google.com" },
+    @{ Name = "OpenDNS"; Server = "208.67.222.222"; Query = "opendns.com" },
+    @{ Name = "Quad9"; Server = "9.9.9.9"; Query = "quad9.net" }
+  )
+  
+  foreach ($test in $ispDnsTests) {
+    try {
+      & $WriteLog "Testing $($test.Name) ($($test.Server))..."
+      $result = Resolve-DnsName -Name $test.Query -Server $test.Server -ErrorAction Stop
+      if ($result) {
+        $diagnostics += @{ Test = $test.Name; Status = "OK"; Result = "DNS resolution successful" }
+        & $WriteLog "  $($test.Name): OK"
+      }
+    } catch {
+      $diagnostics += @{ Test = $test.Name; Status = "FAIL"; Result = $_.Exception.Message }
+      & $WriteLog "  $($test.Name): FAIL - $($_.Exception.Message)"
+    }
+  }
+  
+  # Test different packet sizes to detect MTU issues
+  $mtuTests = @(64, 512, 1472)
+  & $WriteLog "Testing MTU with different packet sizes..."
+  
+  foreach ($size in $mtuTests) {
+    try {
+      $ping = Test-Connection -TargetName '1.1.1.1' -Count 1 -BufferSize $size -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping) {
+        $diagnostics += @{ Test = "MTU-$size"; Status = "OK"; Result = "Packet size $size successful" }
+        & $WriteLog "  MTU test $size bytes: OK"
+      }
+    } catch {
+      $diagnostics += @{ Test = "MTU-$size"; Status = "FAIL"; Result = "Packet size $size failed" }
+      & $WriteLog "  MTU test $size bytes: FAIL"
+    }
+  }
+  
+  # Test connection to ISP-specific endpoints
+  $ispEndpoints = @(
+    @{ Name = "Cloudflare"; IP = "1.1.1.1" },
+    @{ Name = "Google DNS"; IP = "8.8.8.8" }
+  )
+  
+  & $WriteLog "Testing connectivity to various endpoints..."
+  foreach ($endpoint in $ispEndpoints) {
+    try {
+      $ping = Test-Connection -TargetName $endpoint.IP -Count 2 -TimeoutSeconds 1 -ErrorAction Stop
+      if ($ping) {
+        $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
+        $diagnostics += @{ Test = "Connectivity-$($endpoint.Name)"; Status = "OK"; Result = "Avg latency: ${avgLatency}ms" }
+        & $WriteLog "  $($endpoint.Name) ($($endpoint.IP)): OK (${avgLatency}ms avg)"
+      }
+    } catch {
+      $diagnostics += @{ Test = "Connectivity-$($endpoint.Name)"; Status = "FAIL"; Result = "Connection failed" }
+      & $WriteLog "  $($endpoint.Name) ($($endpoint.IP)): FAIL"
+    }
+  }
+  
+  return $diagnostics
 }
 
 Export-ModuleMember -Function *
