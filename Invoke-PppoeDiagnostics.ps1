@@ -24,6 +24,8 @@ Import-Module "$here/Modules/PPPoE.Health.psm1" -Force
 Import-Module "$here/Modules/PPPoE.HealthChecks.psm1" -Force
 Import-Module "$here/Modules/PPPoE.Workflows.psm1" -Force
 Import-Module "$here/Modules/PPPoE.Credentials.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Configuration.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Utilities.psm1" -Force
 
 # Initialize logging
 $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
@@ -56,7 +58,7 @@ try {
   $result = Invoke-PPPoEDiagnosticWorkflow -PppoeName $PppoeName -UserName $UserName -Password $Password -TargetAdapter $TargetAdapter -FullLog:$FullLog -SkipWifiToggle:$SkipWifiToggle -KeepPPP:$KeepPPP -WriteLog ${function:Write-Log}
 
   # Display final results summary
-  Write-Log ""
+        Write-Log ""
   Write-Log "=== DIAGNOSTIC COMPLETED ==="
   Write-Log "Health checks completed: $($result.Health.Count) total"
   Write-Log "Selected adapter: $($result.Adapter.Name)"

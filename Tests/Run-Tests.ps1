@@ -28,7 +28,9 @@ if ($TestFiles.Count -eq 0) {
         "PPPoE.Core.Tests.ps1",
         "PPPoE.Health.Tests.ps1", 
         "PPPoE.Net.Tests.ps1",
-        "PPPoE.Integration.Tests.ps1"
+        "PPPoE.Integration.Tests.ps1",
+        "PPPoE.Configuration.Tests.ps1",
+        "PPPoE.Utilities.Tests.ps1"
     )
 }
 
