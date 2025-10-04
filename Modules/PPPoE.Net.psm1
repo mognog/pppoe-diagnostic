@@ -327,4 +327,182 @@ function Test-DefaultRouteVia {
   return ($def.InterfaceIndex -eq $IfIndex)
 }
 
+function Test-DNSResolution {
+  param([string]$InterfaceAlias, [scriptblock]$WriteLog)
+  
+  $dnsTests = @(
+    @{ Name = "Google DNS (8.8.8.8)"; Server = "8.8.8.8"; Query = "google.com" },
+    @{ Name = "Cloudflare DNS (1.1.1.1)"; Server = "1.1.1.1"; Query = "cloudflare.com" },
+    @{ Name = "Quad9 DNS (9.9.9.9)"; Server = "9.9.9.9"; Query = "quad9.net" }
+  )
+  
+  $results = @()
+  foreach ($test in $dnsTests) {
+    try {
+      & $WriteLog "Testing DNS resolution via $($test.Name)..."
+      $result = Resolve-DnsName -Name $test.Query -Server $test.Server -ErrorAction Stop
+      if ($result) {
+        $ip = $result[0].IPAddress
+        & $WriteLog "DNS OK: $($test.Query) -> $ip via $($test.Server)"
+        $results += @{ Test = $test.Name; Status = "OK"; Result = "$($test.Query) -> $ip" }
+      }
+    } catch {
+      & $WriteLog "DNS FAIL: $($test.Name) - $($_.Exception.Message)"
+      $results += @{ Test = $test.Name; Status = "FAIL"; Result = $_.Exception.Message }
+    }
+  }
+  return $results
+}
+
+function Test-PacketLoss {
+  param([string]$TargetIP, [int]$Count = 20, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing packet loss to $TargetIP ($Count packets)..."
+  $results = @()
+  
+  for ($i = 1; $i -le $Count; $i++) {
+    try {
+      $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping) {
+        $results += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
+        & $WriteLog "Packet $($i): OK ($($ping.ResponseTime)ms)"
+      }
+    } catch {
+      $results += @{ Packet = $i; Success = $false; Latency = $null }
+      & $WriteLog "Packet $($i): LOST"
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  
+  $successful = ($results | Where-Object { $_.Success }).Count
+  $lost = $Count - $successful
+  $lossPercent = [Math]::Round(($lost / $Count) * 100, 1)
+  $avgLatency = if ($successful -gt 0) {
+    [Math]::Round(($results | Where-Object { $_.Success } | Measure-Object -Property Latency -Average).Average, 1)
+  } else { 0 }
+  
+  & $WriteLog "Packet loss test complete: $successful/$Count packets received ($lossPercent% loss), avg latency: $($avgLatency)ms"
+  return @{ 
+    TotalPackets = $Count; 
+    SuccessfulPackets = $successful; 
+    LostPackets = $lost; 
+    LossPercent = $lossPercent; 
+    AvgLatency = $avgLatency;
+    Results = $results 
+  }
+}
+
+function Test-RouteStability {
+  param([string]$TargetIP, [int]$Count = 10, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing route stability to $TargetIP ($Count traces)..."
+  $routes = @()
+  
+  for ($i = 1; $i -le $Count; $i++) {
+    try {
+      & $WriteLog "Route trace $i/$Count..."
+      $trace = tracert -d -h 5 $TargetIP 2>$null
+      $hops = $trace | Where-Object { $_ -match '^\s*\d+\s+' } | ForEach-Object {
+        if ($_ -match '^\s*\d+\s+.*?\s+(\d+\.\d+\.\d+\.\d+)') {
+          $matches[1]
+        }
+      }
+      $routes += $hops
+      & $WriteLog "Route $($i): $($hops -join ' -> ')"
+    } catch {
+      & $WriteLog "Route trace $($i) failed: $($_.Exception.Message)"
+    }
+    Start-Sleep -Seconds 2
+  }
+  
+  # Analyze route consistency
+  $uniqueRoutes = $routes | Group-Object | Sort-Object Count -Descending
+  $mostCommon = $uniqueRoutes[0]
+  $consistency = [Math]::Round(($mostCommon.Count / $Count) * 100, 1)
+  
+  & $WriteLog "Route analysis: $consistency% consistency (most common: $($mostCommon.Name) - $($mostCommon.Count)/$Count times)"
+  return @{ 
+    TotalTraces = $Count; 
+    Consistency = $consistency; 
+    MostCommonRoute = $mostCommon.Name; 
+    AllRoutes = $routes 
+  }
+}
+
+function Get-InterfaceStatistics {
+  param([string]$InterfaceName, [scriptblock]$WriteLog)
+  
+  try {
+    $stats = Get-NetAdapterStatistics -Name $InterfaceName -ErrorAction Stop
+    $errors = Get-NetAdapterAdvancedProperty -Name $InterfaceName -RegistryKeyword "*Error*" -ErrorAction SilentlyContinue
+    
+    & $WriteLog "Interface statistics for $($InterfaceName):"
+    & $WriteLog "  Bytes sent: $($stats.BytesSent)"
+    & $WriteLog "  Bytes received: $($stats.BytesReceived)"
+    & $WriteLog "  Packets sent: $($stats.PacketsSent)"
+    & $WriteLog "  Packets received: $($stats.PacketsReceived)"
+    
+    if ($errors) {
+      foreach ($err in $errors) {
+        if ($err.DisplayValue -and $err.DisplayValue -ne "0") {
+          & $WriteLog "  $($err.DisplayName): $($err.DisplayValue)"
+        }
+      }
+    }
+    
+    return @{
+      BytesSent = $stats.BytesSent;
+      BytesReceived = $stats.BytesReceived;
+      PacketsSent = $stats.PacketsSent;
+      PacketsReceived = $stats.PacketsReceived;
+      Errors = $errors
+    }
+  } catch {
+    & $WriteLog "Could not retrieve interface statistics: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-ConnectionStability {
+  param([string]$TargetIP, [int]$DurationSeconds = 60, [scriptblock]$WriteLog)
+  
+  & $WriteLog "Starting $DurationSeconds second stability test to $TargetIP..."
+  $startTime = Get-Date
+  $endTime = $startTime.AddSeconds($DurationSeconds)
+  $results = @()
+  
+  while ((Get-Date) -lt $endTime) {
+    $elapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+    try {
+      $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping) {
+        $results += @{ Time = $elapsed; Success = $true; Latency = $ping.ResponseTime }
+        & $WriteLog "[$($elapsed)s] OK ($($ping.ResponseTime)ms)"
+      }
+    } catch {
+      $results += @{ Time = $elapsed; Success = $false; Latency = $null }
+      & $WriteLog "[$($elapsed)s] FAIL"
+    }
+    Start-Sleep -Seconds 5
+  }
+  
+  $successful = ($results | Where-Object { $_.Success }).Count
+  $total = $results.Count
+  $uptime = [Math]::Round(($successful / $total) * 100, 1)
+  $avgLatency = if ($successful -gt 0) {
+    [Math]::Round(($results | Where-Object { $_.Success } | Measure-Object -Property Latency -Average).Average, 1)
+  } else { 0 }
+  
+  & $WriteLog "Stability test complete: $uptime% uptime ($successful/$total tests passed), avg latency: $($avgLatency)ms"
+  return @{ 
+    DurationSeconds = $DurationSeconds; 
+    UptimePercent = $uptime; 
+    SuccessfulTests = $successful; 
+    TotalTests = $total; 
+    AvgLatency = $avgLatency;
+    Results = $results 
+  }
+}
+
 Export-ModuleMember -Function *
+

@@ -256,6 +256,21 @@ OVERALL: OK
 
 ## Important Notes
 
+### ONT/ISP Session Management
+Many ISPs implement **session timeout periods** on their ONT (Optical Network Terminal) or BRAS (Broadband Remote Access Server) equipment. This means:
+
+- **After disconnecting a PPPoE session**, there's typically a 30-60 second wait period before a new session can be established
+- **If the first connection attempt fails**, wait 30-60 seconds before trying again
+- **This is normal behavior** and not a fault with your connection or the diagnostic tool
+- **The tool automatically disconnects** any existing connections at startup to ensure clean testing
+
+**Common Scenario:**
+```
+[15:46:28] FAILED: Windows saved credentials failed (exit code: 691)
+[15:46:29] SUCCESS: Connected using credentials from file
+```
+This shows the first attempt failed (possibly due to session timeout), but the second attempt succeeded.
+
 ### IP Address Classifications
 - **Public IP**: Normal internet connection with full connectivity
 - **CGNAT (100.64.0.0/10)**: Carrier-grade NAT - works for outbound connections but inbound services/port-forwarding may not work

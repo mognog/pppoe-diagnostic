@@ -300,6 +300,52 @@ try {
       $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
     }
 
+    # DNS Resolution Tests
+    Write-Log "Testing DNS resolution capabilities..."
+    $dnsResults = Test-DNSResolution -InterfaceAlias $pppIf.InterfaceAlias -WriteLog ${function:Write-Log}
+    $dnsSuccess = ($dnsResults | Where-Object { $_.Status -eq 'OK' }).Count
+    $dnsTotal = $dnsResults.Count
+    if ($dnsSuccess -eq $dnsTotal) {
+      $Health = Add-Health $Health 'DNS resolution' 'OK (All DNS servers working)' 21
+    } elseif ($dnsSuccess -gt 0) {
+      $Health = Add-Health $Health 'DNS resolution' "WARN ($dnsSuccess/$dnsTotal DNS servers working)" 21
+    } else {
+      $Health = Add-Health $Health 'DNS resolution' 'FAIL (No DNS servers working)' 21
+    }
+
+    # Packet Loss Test
+    Write-Log "Testing packet loss to 1.1.1.1..."
+    $packetLoss = Test-PacketLoss -TargetIP '1.1.1.1' -Count 20 -WriteLog ${function:Write-Log}
+    if ($packetLoss.LossPercent -eq 0) {
+      $Health = Add-Health $Health 'Packet loss test' "OK (0% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    } elseif ($packetLoss.LossPercent -le 2) {
+      $Health = Add-Health $Health 'Packet loss test' "WARN ($($packetLoss.LossPercent)% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    } else {
+      $Health = Add-Health $Health 'Packet loss test' "FAIL ($($packetLoss.LossPercent)% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    }
+
+    # Route Stability Test
+    Write-Log "Testing route stability to 8.8.8.8..."
+    $routeStability = Test-RouteStability -TargetIP '8.8.8.8' -Count 5 -WriteLog ${function:Write-Log}
+    if ($routeStability.Consistency -ge 80) {
+      $Health = Add-Health $Health 'Route stability' "OK ($($routeStability.Consistency)% consistent)" 23
+    } elseif ($routeStability.Consistency -ge 60) {
+      $Health = Add-Health $Health 'Route stability' "WARN ($($routeStability.Consistency)% consistent)" 23
+    } else {
+      $Health = Add-Health $Health 'Route stability' "FAIL ($($routeStability.Consistency)% consistent)" 23
+    }
+
+    # Interface Statistics
+    Write-Log "Checking PPP interface statistics..."
+    $interfaceStats = Get-InterfaceStatistics -InterfaceName $pppIf.InterfaceAlias -WriteLog ${function:Write-Log}
+    if ($interfaceStats -and $interfaceStats.Errors.Count -eq 0) {
+      $Health = Add-Health $Health 'Interface statistics' 'OK (No errors detected)' 24
+    } elseif ($interfaceStats) {
+      $Health = Add-Health $Health 'Interface statistics' 'WARN (Some errors detected)' 24
+    } else {
+      $Health = Add-Health $Health 'Interface statistics' 'FAIL (Could not retrieve stats)' 24
+    }
+
     # Traceroute diagnostics (may take up to ~60s each)
     Write-Log "Starting traceroute to 1.1.1.1 (may take up to 60s)..."
     try {
@@ -314,10 +360,10 @@ try {
         Write-Log "[tracert 1.1.1.1] $line"
       }
       $proc.WaitForExit()
-      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'DONE' 21
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'DONE' 25
     } catch {
       Write-Log "Traceroute 1.1.1.1 error: $($_.Exception.Message)"
-      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'ERROR' 21
+      $Health = Add-Health $Health 'Traceroute (1.1.1.1)' 'ERROR' 25
     }
 
     Write-Log "Starting traceroute to 8.8.8.8 (may take up to 60s)..."
@@ -333,10 +379,28 @@ try {
         Write-Log "[tracert 8.8.8.8] $line2"
       }
       $proc2.WaitForExit()
-      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'DONE' 22
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'DONE' 26
     } catch {
       Write-Log "Traceroute 8.8.8.8 error: $($_.Exception.Message)"
-      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'ERROR' 22
+      $Health = Add-Health $Health 'Traceroute (8.8.8.8)' 'ERROR' 26
+    }
+
+    # Optional: Connection Stability Test (60 seconds)
+    Write-Log ""
+    Write-Log "Would you like to run a 60-second connection stability test? (y/N)"
+    $stabilityChoice = Read-Host
+    if ($stabilityChoice -match '^[yY]') {
+      $stabilityTest = Test-ConnectionStability -TargetIP '1.1.1.1' -DurationSeconds 60 -WriteLog ${function:Write-Log}
+      if ($stabilityTest.UptimePercent -ge 95) {
+        $Health = Add-Health $Health 'Connection stability' "OK ($($stabilityTest.UptimePercent)% uptime)" 27
+      } elseif ($stabilityTest.UptimePercent -ge 90) {
+        $Health = Add-Health $Health 'Connection stability' "WARN ($($stabilityTest.UptimePercent)% uptime)" 27
+      } else {
+        $Health = Add-Health $Health 'Connection stability' "FAIL ($($stabilityTest.UptimePercent)% uptime)" 27
+      }
+    } else {
+      Write-Log "Skipping stability test."
+      $Health = Add-Health $Health 'Connection stability' 'SKIP (User declined)' 27
     }
 
   } else {
