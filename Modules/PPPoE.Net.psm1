@@ -75,7 +75,13 @@ function Connect-PPPWithFallback {
   $result = Connect-PPP -PppoeName $PppoeName -UseSaved
   if ($result.Success) {
     & $WriteLog "SUCCESS: Connected using Windows saved credentials"
-    & $AddHealth 'Credentials source' 'OK (Using Windows saved credentials)' 3
+    try {
+      # Note: AddHealth function expects $Health as first parameter, but we can't access it here
+      # So we'll just log the success and let the main script handle health updates
+      & $WriteLog "SUCCESS: Windows saved credentials will be recorded in health summary"
+    } catch {
+      & $WriteLog "WARN: Could not log health status: $($_.Exception.Message)"
+    }
     return @{ 
       Success = $true; 
       Code = $result.Code; 
@@ -88,20 +94,42 @@ function Connect-PPPWithFallback {
   
   # Attempt 2: Try external credentials file
   if ($CredentialsFile -and (Test-Path $CredentialsFile)) {
+    & $WriteLog "Attempt 2: Loading credentials from file '$CredentialsFile'"
     try {
-      & $WriteLog "Attempt 2: Loading credentials from file '$CredentialsFile'"
+      # Clear any existing credential variables to avoid conflicts
+      $PPPoE_Username = $null
+      $PPPoE_Password = $null
+      $PPPoE_ConnectionName = $null
+      
+      # Dot-source the credentials file
       . $CredentialsFile
-      if ($PPPoE_Username -and $PPPoE_Password -and 
+      
+      # Check if variables were loaded successfully
+      if ((Get-Variable -Name 'PPPoE_Username' -ErrorAction SilentlyContinue) -and 
+          (Get-Variable -Name 'PPPoE_Password' -ErrorAction SilentlyContinue) -and
+          $PPPoE_Username -and $PPPoE_Password -and 
           $PPPoE_Username.Trim() -ne '' -and $PPPoE_Password.Trim() -ne '') {
+        
         $fileUserName = $PPPoE_Username
         $filePassword = $PPPoE_Password
-        $fileConnectionName = if ($PPPoE_ConnectionName -and $PPPoE_ConnectionName.Trim() -ne '') { $PPPoE_ConnectionName } else { $PppoeName }
+        $fileConnectionName = if ((Get-Variable -Name 'PPPoE_ConnectionName' -ErrorAction SilentlyContinue) -and 
+                                 $PPPoE_ConnectionName -and $PPPoE_ConnectionName.Trim() -ne '') { 
+                                 $PPPoE_ConnectionName 
+                               } else { 
+                                 $PppoeName 
+                               }
         
         & $WriteLog "Attempt 2: Trying credentials from file for user '$fileUserName' on connection '$fileConnectionName'"
         $result = Connect-PPP -PppoeName $fileConnectionName -UserName $fileUserName -Password $filePassword
         if ($result.Success) {
           & $WriteLog "SUCCESS: Connected using credentials from file"
-          & $AddHealth 'Credentials source' "OK (Using credentials from file for: $fileUserName)" 3
+        try {
+          # Note: AddHealth function expects $Health as first parameter, but we can't access it here
+          # So we'll just log the success and let the main script handle health updates
+          & $WriteLog "SUCCESS: Credentials from file will be recorded in health summary"
+        } catch {
+          & $WriteLog "WARN: Could not log health status: $($_.Exception.Message)"
+        }
           return @{ 
             Success = $true; 
             Code = $result.Code; 
@@ -112,7 +140,7 @@ function Connect-PPPWithFallback {
         }
         & $WriteLog "FAILED: Credentials from file failed (exit code: $($result.Code))"
       } else {
-        & $WriteLog "SKIP: Credentials file exists but values are empty"
+        & $WriteLog "SKIP: Credentials file exists but values are empty or invalid"
       }
     } catch {
       & $WriteLog "SKIP: Failed to load credentials from file: $($_.Exception.Message)"
@@ -127,7 +155,13 @@ function Connect-PPPWithFallback {
     $result = Connect-PPP -PppoeName $PppoeName -UserName $UserName -Password $Password
     if ($result.Success) {
       & $WriteLog "SUCCESS: Connected using script parameters"
-      & $AddHealth 'Credentials source' "OK (Using script parameters for: $UserName)" 3
+      try {
+        # Note: AddHealth function expects $Health as first parameter, but we can't access it here
+        # So we'll just log the success and let the main script handle health updates
+        & $WriteLog "SUCCESS: Script parameters will be recorded in health summary"
+      } catch {
+        & $WriteLog "WARN: Could not log health status: $($_.Exception.Message)"
+      }
       return @{ 
         Success = $true; 
         Code = $result.Code; 
@@ -161,10 +195,30 @@ function Connect-PPPWithFallback {
 function Get-PppInterface {
   param([string]$PppoeName)
 
-  $if = Get-NetIPInterface -AddressFamily IPv4 | Where-Object {
-    $_.InterfaceDescription -match 'PPP' -or $_.InterfaceAlias -match [regex]::Escape($PppoeName)
+  try {
+    # Look for PPP interfaces by checking for PPP in the interface alias or description
+    $if = Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+      $_.InterfaceAlias -match 'PPP' -or $_.InterfaceAlias -match [regex]::Escape($PppoeName)
+    }
+    
+    # If we found interfaces, return the first one
+    if ($if -and $if.Count -gt 0) { 
+      return $if[0] 
+    }
+    
+    # If no specific match, try to find any connected interface that might be the PPP connection
+    $allIfs = Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+      $_.ConnectionState -eq 'Connected' -and $_.InterfaceAlias -match 'PPP'
+    }
+    
+    if ($allIfs -and $allIfs.Count -gt 0) {
+      return $allIfs[0]
+    }
+    
+    return $null
+  } catch {
+    return $null
   }
-  if ($if -and $if.Count -gt 0) { return $if[0] } else { return $null }
 }
 
 function Get-PppIPv4 {

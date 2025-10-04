@@ -168,10 +168,18 @@ try {
     Write-Log "Final connection result: Method=$($res.Method), Success=$($res.Success), ExitCode=$($res.Code)"
     Write-Log "rasdial output:`n$out"
 
-    # Map rasdial errors
+    # Map rasdial errors and update credentials source
     $authOk = $res.Success
     if ($authOk) { 
       $Health = Add-Health $Health 'PPPoE authentication' 'OK' 12
+      # Update credentials source based on the method used
+      $credSource = switch ($res.Method) {
+        'Windows Saved' { 'OK (Using Windows saved credentials)' }
+        'File' { "OK (Using credentials from file for: $($res.CredentialSource -replace 'credentials.ps1 file for user: ', ''))" }
+        'Parameters' { "OK (Using script parameters for: $($res.CredentialSource -replace 'script parameters for user: ', ''))" }
+        default { "OK (Using $($res.Method))" }
+      }
+      $Health = Add-Health $Health 'Credentials source' $credSource 11
     } else {
       $reason = switch ($res.Code) {
         691 { '691 bad credentials' }
@@ -181,6 +189,7 @@ try {
         default { "code $($res.Code)" }
       }
       $Health = Add-Health $Health 'PPPoE authentication' ("FAIL ($reason)") 12
+      $Health = Add-Health $Health 'Credentials source' 'FAIL (All credential methods failed)' 11
     }
   }
 
@@ -190,26 +199,43 @@ try {
   $defViaPPP = $false
 
   if (-not $linkDown -and $authOk) {
-    $pppIf = Get-PppInterface -PppoeName $PppoeName
-    if ($pppIf -and $pppIf.ConnectionState -eq 'Connected') {
-      $Health = Add-Health $Health 'PPP interface present' ("OK (IfIndex $($pppIf.InterfaceIndex), '$($pppIf.InterfaceAlias)')") 13
-      $pppIP = Get-PppIPv4 -IfIndex $pppIf.InterfaceIndex
-      if ($pppIP) {
-        $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))") 14
-      } else {
-        $Health = Add-Health $Health 'PPP IPv4 assignment' ("FAIL (no non-APIPA IPv4)") 14
-      }
+    try {
+      Write-Log "Looking for PPP interface after successful connection..."
+      $pppIf = Get-PppInterface -PppoeName $connectionNameToUse
+      Write-Log "PPP interface search result: $($null -ne $pppIf)"
+      
+      if ($pppIf -and $pppIf.ConnectionState -eq 'Connected') {
+        $Health = Add-Health $Health 'PPP interface present' ("OK (IfIndex $($pppIf.InterfaceIndex), '$($pppIf.InterfaceAlias)')") 13
+        Write-Log "Found connected PPP interface: $($pppIf.InterfaceAlias) (Index: $($pppIf.InterfaceIndex))"
+        
+        $pppIP = Get-PppIPv4 -IfIndex $pppIf.InterfaceIndex
+        if ($pppIP) {
+          $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))") 14
+          Write-Log "PPP IPv4 address: $($pppIP.IPAddress)/$($pppIP.PrefixLength)"
+        } else {
+          $Health = Add-Health $Health 'PPP IPv4 assignment' ("FAIL (no non-APIPA IPv4)") 14
+          Write-Log "No valid IPv4 address found on PPP interface"
+        }
 
-      $defViaPPP = Test-DefaultRouteVia -IfIndex $pppIf.InterfaceIndex
-      if ($defViaPPP) {
-        $Health = Add-Health $Health 'Default route via PPP' 'OK' 15
+        $defViaPPP = Test-DefaultRouteVia -IfIndex $pppIf.InterfaceIndex
+        if ($defViaPPP) {
+          $Health = Add-Health $Health 'Default route via PPP' 'OK' 15
+          Write-Log "Default route is via PPP interface"
+        } else {
+          $Health = Add-Health $Health 'Default route via PPP' 'WARN (still via other interface)' 15
+          Write-Log "Default route is NOT via PPP interface"
+        }
       } else {
-        $Health = Add-Health $Health 'Default route via PPP' 'WARN (still via other interface)' 15
+        Write-Log "No connected PPP interface found"
+        $Health = Add-Health $Health 'PPP interface present' 'FAIL (not created/connected)' 13
+        $Health = Add-Health $Health 'PPP IPv4 assignment' 'FAIL (no interface)' 14
+        $Health = Add-Health $Health 'Default route via PPP' 'FAIL (no interface)' 15
       }
-    } else {
-      $Health = Add-Health $Health 'PPP interface present' 'FAIL (not created/connected)' 13
-      $Health = Add-Health $Health 'PPP IPv4 assignment' 'FAIL (no interface)' 14
-      $Health = Add-Health $Health 'Default route via PPP' 'FAIL (no interface)' 15
+    } catch {
+      Write-Log "Error detecting PPP interface: $($_.Exception.Message)"
+      $Health = Add-Health $Health 'PPP interface present' 'FAIL (error detecting interface)' 13
+      $Health = Add-Health $Health 'PPP IPv4 assignment' 'FAIL (error detecting interface)' 14
+      $Health = Add-Health $Health 'Default route via PPP' 'FAIL (error detecting interface)' 15
     }
   } else {
     if (-not $linkDown) {
