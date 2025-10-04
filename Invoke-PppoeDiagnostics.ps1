@@ -5,7 +5,7 @@
 param(
   [string]$PppoeName = 'PPPoE',
   [string]$UserName,
-  [string]$Password,
+  [string]$Password,  # Note: Using string for compatibility with rasdial command
   [string]$TargetAdapter,
   [switch]$FullLog,
   [switch]$SkipWifiToggle,
@@ -87,18 +87,18 @@ try {
           $Health = Add-Health $Health 'Credentials source' "OK (Loaded from credentials.ps1 for: $UserName)" 3
           Write-Log "Loaded credentials from file for user: $UserName"
         } else {
-          Write-Log "[DEBUG] Credentials file exists but values are empty/null, will use saved Windows credentials"
-          $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
-          Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
+          Write-Log "[DEBUG] Credentials file exists but values are empty/null, no credentials found"
+          $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
+          Write-Log "No credentials found - attempting connection without explicit credentials"
         }
       } catch {
         Write-Log "[WARN] Failed to load credentials from file: $($_.Exception.Message)"
-        $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
-        Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
+        $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
+        Write-Log "No credentials found - attempting connection without explicit credentials"
       }
     } else {
-      $Health = Add-Health $Health 'Credentials source' 'OK (Using saved Windows credentials)' 3
-      Write-Log "Using saved Windows credentials (cannot display username due to security restrictions)"
+      $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
+      Write-Log "No credentials found - attempting connection without explicit credentials"
     }
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
@@ -248,7 +248,7 @@ try {
     # MTU probe (rough)
     # We try payload 1472 with DF; if success -> ~1492 MTU on PPP
     try {
-      $ping = Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop
+      Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
       $Health = Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)' 20
     } catch {
       $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
