@@ -17,6 +17,59 @@ function Get-RecommendedAdapter {
   return $null
 }
 
+function Select-NetworkAdapter {
+  param([scriptblock]$WriteLog)
+  
+  $adapters = Get-CandidateEthernetAdapters
+  if ($adapters.Count -eq 0) {
+    & $WriteLog "No Ethernet adapters found"
+    return $null
+  }
+  
+  if ($adapters.Count -eq 1) {
+    $adapter = $adapters[0]
+    & $WriteLog "Only one Ethernet adapter found: $($adapter.Name) - $($adapter.InterfaceDescription)"
+    return $adapter
+  }
+  
+  # Multiple adapters - show selection menu
+  & $WriteLog ""
+  & $WriteLog "Multiple Ethernet adapters detected. Please select one:"
+  & $WriteLog ""
+  
+  for ($i = 0; $i -lt $adapters.Count; $i++) {
+    $adapter = $adapters[$i]
+    $status = if ($adapter.Status -eq 'Up') { "UP" } else { "DOWN" }
+    $speed = if ($adapter.LinkSpeed -gt 0) { "$($adapter.LinkSpeed) bps" } else { "No link" }
+    & $WriteLog "[$($i + 1)] $($adapter.Name) - $($adapter.InterfaceDescription) ($status, $speed)"
+  }
+  
+  # Get recommended adapter for default
+  $recommended = Get-RecommendedAdapter
+  $defaultChoice = if ($recommended) {
+    $index = [array]::IndexOf($adapters, $recommended) + 1
+    if ($index -gt 0) { $index } else { 1 }
+  } else { 1 }
+  
+  & $WriteLog ""
+  & $WriteLog "Enter choice (1-$($adapters.Count)) or press Enter for recommended [$defaultChoice]: "
+  
+  do {
+    $choice = Read-Host
+    if ([string]::IsNullOrEmpty($choice)) {
+      $choice = $defaultChoice
+    }
+    
+    if ($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $adapters.Count) {
+      $selectedAdapter = $adapters[[int]$choice - 1]
+      & $WriteLog "Selected: $($selectedAdapter.Name) - $($selectedAdapter.InterfaceDescription)"
+      return $selectedAdapter
+    } else {
+      & $WriteLog "Invalid choice. Please enter a number between 1 and $($adapters.Count): "
+    }
+  } while ($true)
+}
+
 function Test-LinkUp {
   param([string]$AdapterName)
   $nic = Get-NetAdapter -Name $AdapterName -ErrorAction Stop
@@ -31,6 +84,35 @@ function Disconnect-PPP {
   param([string]$PppoeName)
   try { rasdial "$PppoeName" /disconnect | Out-Null } catch {}
   Start-Sleep -Milliseconds 800
+}
+
+function Disconnect-AllPPPoE {
+  # Disconnect all existing PPPoE connections to start clean
+  $commonNames = @('Rise PPPoE', 'PPPoE', 'Broadband Connection', 'Ransomeware_6G 2', 'RAS')
+  
+  foreach ($name in $commonNames) {
+    try {
+      rasdial "$name" /disconnect 2>$null | Out-Null
+    } catch {
+      # Ignore errors - connection might not exist
+    }
+  }
+  
+  # Also try to disconnect any connections that might be active
+  try {
+    $activeConnections = Get-NetConnectionProfile | Where-Object { $_.Name -match 'PPPoE|RAS|Broadband' }
+    foreach ($conn in $activeConnections) {
+      try {
+        rasdial "$($conn.Name)" /disconnect 2>$null | Out-Null
+      } catch {
+        # Ignore errors
+      }
+    }
+  } catch {
+    # Ignore errors
+  }
+  
+  Start-Sleep -Milliseconds 1000
 }
 
 function Connect-PPP {

@@ -30,6 +30,11 @@ try {
   Write-Log "PowerShell version: $($PSVersionTable.PSVersion)"
   Write-Log "Script path: $($MyInvocation.MyCommand.Path)"
 
+  # Disconnect any existing PPPoE connections to start clean
+  Write-Log "Disconnecting any existing PPPoE connections..."
+  Disconnect-AllPPPoE
+  Write-Log "Cleanup complete."
+
   $Health = New-Health
 
   # Define health check order for logical grouping
@@ -113,9 +118,18 @@ try {
   # [3] NIC selection
   $nic = $null
   if ($TargetAdapter) {
-    try { $nic = Get-NetAdapter -Name $TargetAdapter -ErrorAction Stop } catch { $nic = $null }
+    try { 
+      $nic = Get-NetAdapter -Name $TargetAdapter -ErrorAction Stop 
+      Write-Ok "Using specified adapter: $($nic.Name) / $($nic.InterfaceDescription) @ $($nic.LinkSpeed)"
+    } catch { 
+      Write-Warn "Specified adapter '$TargetAdapter' not found, will show selection menu"
+      $nic = $null 
+    }
   }
-  if (-not $nic) { $nic = Get-RecommendedAdapter }
+  
+  if (-not $nic) { 
+    $nic = Select-NetworkAdapter -WriteLog ${function:Write-Log}
+  }
 
   if ($null -eq $nic) {
     Write-Err "No Ethernet adapters detected"
