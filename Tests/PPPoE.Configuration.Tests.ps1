@@ -9,7 +9,7 @@ try {
     $modulePath = Join-Path $PSScriptRoot "../Modules/PPPoE.Configuration.psm1"
     Import-Module $modulePath -Force
     
-    Write-Host "🔍 Running basic validation tests for PPPoE.Configuration module..."
+    Write-Host "Running basic validation tests for PPPoE.Configuration module..."
     
     # Test function wrapper
     function Test-Function {
@@ -17,14 +17,14 @@ try {
         try {
             $result = & $TestScript
             if ($result) {
-                Write-Host "✅ $Name" -ForegroundColor Green
+                Write-Host "PASS: $Name" -ForegroundColor Green
                 return $true
             } else {
-                Write-Host "❌ $Name" -ForegroundColor Red
+                Write-Host "FAIL: $Name" -ForegroundColor Red
                 return $false
             }
         } catch {
-            Write-Host "❌ $Name - Error: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "FAIL: $Name - Error: $($_.Exception.Message)" -ForegroundColor Red
             return $false
         }
     }
@@ -66,14 +66,14 @@ try {
         return ($params -is [hashtable] -and $params.ContainsKey('PppoeName'))
     }
     
-    # Test Validate-Configuration
-    Test-Function "Validate-Configuration validates default config" {
+    # Test Test-Configuration
+    Test-Function "Test-Configuration validates default config" {
         $config = Get-ProjectConfiguration
-        $validation = Validate-Configuration -Config $config
+        $validation = Test-Configuration -Config $config
         return ($validation -is [hashtable] -and $validation.ContainsKey('IsValid') -and $validation.IsValid)
     }
     
-    Test-Function "Validate-Configuration detects invalid config" {
+    Test-Function "Test-Configuration detects invalid config" {
         $invalidConfig = @{
             Logging = @{
                 LogDirectory = $null
@@ -82,9 +82,10 @@ try {
             Network = @{
                 DefaultPPPoEName = $null
                 PingTimeout = 50
+                PingCount = 0
             }
         }
-        $validation = Validate-Configuration -Config $invalidConfig
+        $validation = Test-Configuration -Config $invalidConfig
         return ($validation -is [hashtable] -and -not $validation.IsValid -and $validation.Issues.Count -gt 0)
     }
     
@@ -144,18 +145,18 @@ try {
     $total = $passed + $failed
     
     Write-Host ""
-    Write-Host "📊 Test Results Summary:" -ForegroundColor Cyan
-    Write-Host "✅ Passed: $passed" -ForegroundColor Green
-    Write-Host "❌ Failed: $failed" -ForegroundColor Red
-    Write-Host "📈 Total: $total" -ForegroundColor Cyan
+    Write-Host "Test Results Summary:" -ForegroundColor Cyan
+    Write-Host "Passed: $passed" -ForegroundColor Green
+    Write-Host "Failed: $failed" -ForegroundColor Red
+    Write-Host "Total: $total" -ForegroundColor Cyan
     
     if ($failed -eq 0) {
         Write-Host ""
-        Write-Host "🎉 All tests passed!" -ForegroundColor Green
+        Write-Host "All tests passed!" -ForegroundColor Green
         exit 0
     } else {
         Write-Host ""
-        Write-Host "❌ Some tests failed!" -ForegroundColor Red
+        Write-Host "Some tests failed!" -ForegroundColor Red
         exit 1
     }
     

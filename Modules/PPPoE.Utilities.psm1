@@ -287,4 +287,56 @@ function Get-EnvironmentInfo {
   }
 }
 
+function Get-DisabledWiFiAdapters {
+  try {
+    $wifiAdapters = Get-NetAdapter | Where-Object { 
+      $_.InterfaceDescription -like "*wireless*" -or 
+      $_.InterfaceDescription -like "*wi-fi*" -or 
+      $_.InterfaceDescription -like "*wlan*" -or
+      $_.Name -like "*Wi-Fi*" -or
+      $_.Name -like "*Wireless*" -or
+      $_.Name -like "*WLAN*"
+    }
+    
+    $disabledAdapters = $wifiAdapters | Where-Object { $_.Status -eq 'Disabled' }
+    return $disabledAdapters | Select-Object -ExpandProperty Name
+  } catch {
+    Write-Warning "Failed to get disabled WiFi adapters: $($_.Exception.Message)"
+    return @()
+  }
+}
+
+function Enable-AllDisabledWiFiAdapters {
+  param(
+    [scriptblock]$WriteLog = { param($msg) Write-Host $msg }
+  )
+  
+  try {
+    $disabledAdapters = Get-DisabledWiFiAdapters
+    if ($disabledAdapters -and $disabledAdapters.Count -gt 0) {
+      & $WriteLog "Found $($disabledAdapters.Count) disabled WiFi adapters, attempting to re-enable..."
+      
+      $enabledCount = 0
+      foreach ($adapterName in $disabledAdapters) {
+        try {
+          Enable-NetAdapter -Name $adapterName -Confirm:$false -ErrorAction Stop
+          & $WriteLog "Re-enabled WiFi adapter: $adapterName"
+          $enabledCount++
+        } catch {
+          & $WriteLog "Failed to re-enable WiFi adapter $adapterName`: $($_.Exception.Message)"
+        }
+      }
+      
+      & $WriteLog "Successfully re-enabled $enabledCount of $($disabledAdapters.Count) WiFi adapters"
+      return $enabledCount
+    } else {
+      & $WriteLog "No disabled WiFi adapters found"
+      return 0
+    }
+  } catch {
+    & $WriteLog "Error during WiFi adapter cleanup: $($_.Exception.Message)"
+    return -1
+  }
+}
+
 Export-ModuleMember -Function *

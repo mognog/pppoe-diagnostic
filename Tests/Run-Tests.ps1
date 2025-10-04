@@ -30,7 +30,10 @@ if ($TestFiles.Count -eq 0) {
         "PPPoE.Net.Tests.ps1",
         "PPPoE.Integration.Tests.ps1",
         "PPPoE.Configuration.Tests.ps1",
-        "PPPoE.Utilities.Tests.ps1"
+        "PPPoE.Utilities.Tests.ps1",
+        "PPPoE.Workflows.Tests.ps1",
+        "PPPoE.Credentials.Tests.ps1",
+        "PPPoE.MainScript.Tests.ps1"
     )
 }
 

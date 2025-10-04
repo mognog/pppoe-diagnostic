@@ -2,6 +2,28 @@
 
 Set-StrictMode -Version 3.0
 
+function ConvertTo-Hashtable {
+  param([object]$InputObject)
+  
+  if ($InputObject -is [hashtable]) {
+    return $InputObject
+  }
+  
+  if ($InputObject -is [PSCustomObject]) {
+    $hashtable = @{}
+    $InputObject.PSObject.Properties | ForEach-Object {
+      if ($_.Value -is [PSCustomObject]) {
+        $hashtable[$_.Name] = ConvertTo-Hashtable -InputObject $_.Value
+      } else {
+        $hashtable[$_.Name] = $_.Value
+      }
+    }
+    return $hashtable
+  }
+  
+  return $InputObject
+}
+
 function Get-ProjectConfiguration {
   param(
     [string]$ConfigPath = $null
@@ -63,7 +85,7 @@ function Get-ProjectConfiguration {
   # Try to load configuration from file
   if (Test-Path $ConfigPath) {
     try {
-      $fileConfig = Get-Content $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
+      $fileConfig = Get-Content $ConfigPath -Raw | ConvertFrom-Json | ConvertTo-Hashtable
       # Merge with defaults (file config takes precedence)
       return Merge-Configuration -Default $defaultConfig -Override $fileConfig
     } catch {
@@ -115,7 +137,7 @@ function Get-DefaultParameters {
   }
 }
 
-function Validate-Configuration {
+function Test-Configuration {
   param(
     [hashtable]$Config
   )
@@ -223,7 +245,7 @@ function Import-Configuration {
   
   try {
     $content = Get-Content $ConfigPath -Raw
-    $config = $content | ConvertFrom-Json -AsHashtable
+    $config = $content | ConvertFrom-Json | ConvertTo-Hashtable
     return $config
   } catch {
     Write-Error "Failed to import configuration: $($_.Exception.Message)"

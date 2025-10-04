@@ -22,7 +22,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   if (-not $SkipWifiToggle) {
     & $WriteLog "Checking WiFi adapter status..."
     $disabledWiFiAdapters = Disable-WiFiAdapters -WriteLog $WriteLog
-    if ($disabledWiFiAdapters.Count -gt 0) {
+    if ($disabledWiFiAdapters -and $disabledWiFiAdapters.Count -gt 0) {
       & $WriteLog "Temporarily disabled $($disabledWiFiAdapters.Count) WiFi adapter(s) to prevent interference"
     } else {
       & $WriteLog "No WiFi adapters were active or found"
@@ -55,7 +55,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   if (-not $linkDown) {
     # Determine the correct connection name to use
     $connectionNameToUse = $PppoeName
-    if ($pppoeConnections.Count -gt 0) {
+    if ($pppoeConnections -and $pppoeConnections.Count -gt 0) {
       # If we found existing connections, use the first one (most likely the correct one)
       $connectionNameToUse = $pppoeConnections[0]
       & $WriteLog "Using detected connection name: '$connectionNameToUse'"
@@ -116,20 +116,14 @@ function Invoke-PPPoEDiagnosticWorkflow {
     }
   }
 
-  # Phase 9: Cleanup and Summary
+  # Phase 9: Final Summary (cleanup handled by main script)
   & $WriteLog ""
-  & $WriteLog "=== CLEANUP AND SUMMARY ==="
+  & $WriteLog "=== FINAL SUMMARY ==="
   
-  # Re-enable WiFi adapters if they were disabled
-  if ($disabledWiFiAdapters.Count -gt 0) {
-    & $WriteLog "Re-enabling WiFi adapters..."
-    Enable-WiFiAdapters -AdapterNames $disabledWiFiAdapters -WriteLog $WriteLog
-  }
-
   # Disconnect PPPoE connection unless KeepPPP is specified
   if (-not $KeepPPP) {
     & $WriteLog "Disconnecting PPPoE connection..."
-    if ($pppoeConnections.Count -gt 0) {
+    if ($pppoeConnections -and $pppoeConnections.Count -gt 0) {
       Disconnect-PPP -PppoeName $pppoeConnections[0]
     } else {
       Disconnect-PPP -PppoeName $PppoeName
@@ -181,7 +175,7 @@ function Invoke-QuickDiagnosticWorkflow {
 
   # Quick connectivity test if link is up
   if (-not $linkDown) {
-    $connectionNameToUse = if ($pppoeConnections.Count -gt 0) { $pppoeConnections[0] } else { $PppoeName }
+    $connectionNameToUse = if ($pppoeConnections -and $pppoeConnections.Count -gt 0) { $pppoeConnections[0] } else { $PppoeName }
     $here = Split-Path -Parent $MyInvocation.MyCommand.Path
     $credentialsFile = Join-Path $here "credentials.ps1"
     

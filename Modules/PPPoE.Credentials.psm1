@@ -88,7 +88,7 @@ function Get-CredentialSource {
   }
 }
 
-function Validate-CredentialsFormat {
+function Test-CredentialsFormat {
   param(
     [string]$UserName,
     [string]$Password
