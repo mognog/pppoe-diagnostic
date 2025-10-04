@@ -157,9 +157,48 @@ try {
   # [4] Link state gate
   if (Test-LinkUp -AdapterName $nic.Name) {
     $Health = Add-Health $Health 'Ethernet link state' 'OK (Up)' 4
+    
+    # [4.1] Hardware & Link-Layer Verification
+    Write-Log ""
+    Write-Log "=== HARDWARE & LINK-LAYER VERIFICATION ==="
+    $linkHealth = Get-LinkHealth -NicName $nic.Name -WriteLog ${function:Write-Log}
+    if ($linkHealth) {
+      if ($linkHealth.ReceivedErrors -eq 0 -and $linkHealth.TransmitErrors -eq 0) {
+        $Health = Add-Health $Health 'Link error counters' 'OK (No errors detected)' 4.1
+      } elseif ($linkHealth.ReceivedErrors -lt 10 -and $linkHealth.TransmitErrors -lt 10) {
+        $Health = Add-Health $Health 'Link error counters' "WARN (Rx:$($linkHealth.ReceivedErrors) Tx:$($linkHealth.TransmitErrors))" 4.1
+      } else {
+        $Health = Add-Health $Health 'Link error counters' "FAIL (Rx:$($linkHealth.ReceivedErrors) Tx:$($linkHealth.TransmitErrors))" 4.1
+      }
+    } else {
+      $Health = Add-Health $Health 'Link error counters' 'FAIL (Could not retrieve stats)' 4.1
+    }
+    
+    # [4.2] Driver Information
+    $driverInfo = Get-AdapterDriverInfo -NicName $nic.Name -WriteLog ${function:Write-Log}
+    if ($driverInfo -and $driverInfo.DeviceStatus -eq "OK") {
+      $Health = Add-Health $Health 'Adapter driver' "OK ($($driverInfo.DriverProvider))" 4.2
+    } else {
+      $Health = Add-Health $Health 'Adapter driver' 'WARN (Driver status unknown)' 4.2
+    }
+    
+    # [4.3] ONT Availability Check
+    $ontStatus = Test-ONTAvailability -WriteLog ${function:Write-Log}
+    if ($ontStatus.Status -eq "OK") {
+      $Health = Add-Health $Health 'ONT availability' "OK ($($ontStatus.ReachableONTs.Count) reachable)" 4.3
+    } else {
+      $Health = Add-Health $Health 'ONT availability' 'WARN (No ONTs reachable)' 4.3
+    }
+    
+    # [4.4] ONT LED Reminder
+    Show-ONTLEDReminder -WriteLog ${function:Write-Log}
+    
   } else {
     Write-Err "Ethernet link is down (0 bps / Disconnected)"
     $Health = Add-Health $Health 'Ethernet link state' 'FAIL (Down)' 4
+    $Health = Add-Health $Health 'Link error counters' 'N/A' 4.1
+    $Health = Add-Health $Health 'Adapter driver' 'N/A' 4.2
+    $Health = Add-Health $Health 'ONT availability' 'N/A' 4.3
     Write-Log "No physical connection, authentication aborted"
     # Skip PPP attempt if link is down - set all remaining checks to N/A
     $Health = Add-Health $Health 'Credentials source' 'N/A' 11
@@ -167,10 +206,15 @@ try {
     $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
     $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
     $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15
+    $Health = Add-Health $Health 'PPPoE service status' 'N/A' 15.1
+    $Health = Add-Health $Health 'PPP gateway assignment' 'N/A' 15.2
     $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
     $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
     $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
     $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
+    $Health = Add-Health $Health 'TCP connectivity' 'N/A' 19.1
+    $Health = Add-Health $Health 'Multi-destination routing' 'N/A' 19.2
+    $Health = Add-Health $Health 'Windows Firewall' 'N/A' 19.3
     $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
     # Skip to health summary - no point in attempting connection without link
     $linkDown = $true
@@ -268,6 +312,29 @@ try {
             Write-Log "Could not adjust route metrics to prefer PPP interface"
           }
         }
+        
+        # [15.1] PPPoE Session Information
+        Write-Log ""
+        Write-Log "=== PPPoE SESSION ANALYSIS ==="
+        $sessionInfo = Get-PPPoESessionInfo -PppoeName $connectionNameToUse -WriteLog ${function:Write-Log}
+        if ($sessionInfo -and $sessionInfo.ServiceStatus -eq "Running") {
+          $Health = Add-Health $Health 'PPPoE service status' 'OK (RasMan running)' 15.1
+        } else {
+          $Health = Add-Health $Health 'PPPoE service status' 'WARN (Service status unknown)' 15.1
+        }
+        
+        # [15.2] PPP Gateway Information
+        $gatewayInfo = Get-PPPGatewayInfo -InterfaceAlias $pppIf.InterfaceAlias -WriteLog ${function:Write-Log}
+        if ($gatewayInfo) {
+          switch ($gatewayInfo.Status) {
+            "OK" { $Health = Add-Health $Health 'PPP gateway assignment' "OK ($($gatewayInfo.Gateway))" 15.2 }
+            "NO_GATEWAY" { $Health = Add-Health $Health 'PPP gateway assignment' 'FAIL (No gateway assigned)' 15.2 }
+            "FAIL" { $Health = Add-Health $Health 'PPP gateway assignment' "FAIL (Gateway unreachable: $($gatewayInfo.Gateway))" 15.2 }
+            default { $Health = Add-Health $Health 'PPP gateway assignment' "WARN ($($gatewayInfo.Status))" 15.2 }
+          }
+        } else {
+          $Health = Add-Health $Health 'PPP gateway assignment' 'FAIL (Could not retrieve gateway info)' 15.2
+        }
       } else {
         Write-Log "No connected PPP interface found"
         $Health = Add-Health $Health 'PPP interface present' 'FAIL (not created/connected)' 13
@@ -319,6 +386,61 @@ try {
     
     $ok88 = Test-PingHost -TargetName '8.8.8.8' -Count 2 -TimeoutMs 1000 -Source $pppIP.IPAddress
     $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' ($ok88 ? 'OK' : 'FAIL') 19
+    
+    # [19.1] TCP Connectivity Tests
+    Write-Log ""
+    Write-Log "=== TCP CONNECTIVITY TESTS ==="
+    $tcpTests = @(
+      @{ Name = "HTTPS (Cloudflare)"; IP = "1.1.1.1"; Port = 443 },
+      @{ Name = "HTTPS (Google)"; IP = "8.8.8.8"; Port = 443 },
+      @{ Name = "HTTP (Cloudflare)"; IP = "1.1.1.1"; Port = 80 }
+    )
+    
+    $tcpSuccessCount = 0
+    foreach ($test in $tcpTests) {
+      $tcpResult = Test-TCPConnectivity -TargetIP $test.IP -Port $test.Port -WriteLog ${function:Write-Log}
+      if ($tcpResult.Status -eq "SUCCESS") {
+        $tcpSuccessCount++
+      }
+    }
+    
+    if ($tcpSuccessCount -eq $tcpTests.Count) {
+      $Health = Add-Health $Health 'TCP connectivity' "OK ($tcpSuccessCount/$($tcpTests.Count) tests passed)" 19.1
+    } elseif ($tcpSuccessCount -gt 0) {
+      $Health = Add-Health $Health 'TCP connectivity' "WARN ($tcpSuccessCount/$($tcpTests.Count) tests passed)" 19.1
+    } else {
+      $Health = Add-Health $Health 'TCP connectivity' "FAIL (0/$($tcpTests.Count) tests passed)" 19.1
+    }
+    
+    # [19.2] Multi-Destination Routing Analysis
+    Write-Log ""
+    Write-Log "=== MULTI-DESTINATION ROUTING ANALYSIS ==="
+    $routingResults = Test-MultiDestinationRouting -WriteLog ${function:Write-Log}
+    $completeRoutes = ($routingResults | Where-Object { $_.Status -eq "COMPLETE" }).Count
+    $totalRoutes = $routingResults.Count
+    
+    if ($completeRoutes -eq $totalRoutes) {
+      $Health = Add-Health $Health 'Multi-destination routing' "OK ($completeRoutes/$totalRoutes complete)" 19.2
+    } elseif ($completeRoutes -gt 0) {
+      $Health = Add-Health $Health 'Multi-destination routing' "WARN ($completeRoutes/$totalRoutes complete)" 19.2
+    } else {
+      $Health = Add-Health $Health 'Multi-destination routing' "FAIL (0/$totalRoutes complete)" 19.2
+    }
+    
+    # [19.3] Firewall State Check
+    Write-Log ""
+    Write-Log "=== FIREWALL STATE CHECK ==="
+    $firewallState = Test-FirewallState -WriteLog ${function:Write-Log}
+    if ($firewallState) {
+      $enabledProfiles = ($firewallState.Profiles | Where-Object { $_.Enabled }).Count
+      if ($enabledProfiles -gt 0) {
+        $Health = Add-Health $Health 'Windows Firewall' "WARN ($enabledProfiles profiles enabled)" 19.3
+      } else {
+        $Health = Add-Health $Health 'Windows Firewall' 'OK (All profiles disabled)' 19.3
+      }
+    } else {
+      $Health = Add-Health $Health 'Windows Firewall' 'WARN (Could not check firewall state)' 19.3
+    }
 
     # MTU probe (rough)
     # We try payload 1472 with DF; if success -> ~1492 MTU on PPP
@@ -486,10 +608,15 @@ try {
   } else {
     if (-not $linkDown) {
       # Link is up but no PPP interface/IP
+      $Health = Add-Health $Health 'PPPoE service status' 'N/A' 15.1
+      $Health = Add-Health $Health 'PPP gateway assignment' 'N/A' 15.2
       $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
       $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
       $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
       $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
+      $Health = Add-Health $Health 'TCP connectivity' 'N/A' 19.1
+      $Health = Add-Health $Health 'Multi-destination routing' 'N/A' 19.2
+      $Health = Add-Health $Health 'Windows Firewall' 'N/A' 19.3
       $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
       $Health = Add-Health $Health 'Quick connectivity' 'N/A' 25
       $Health = Add-Health $Health 'Connection jitter' 'N/A' 26

@@ -895,5 +895,393 @@ function Set-RouteMetrics {
   }
 }
 
+function Get-LinkHealth {
+  param([string]$NicName, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Checking link health for adapter: $NicName"
+    
+    # Get adapter statistics
+    $stats = Get-NetAdapterStatistics -Name $NicName -ErrorAction SilentlyContinue
+    if (-not $stats) {
+      & $WriteLog "Could not retrieve statistics for $NicName"
+      return $null
+    }
+    
+    # Get adapter details
+    $adapter = Get-NetAdapter -Name $NicName -ErrorAction SilentlyContinue
+    if (-not $adapter) {
+      & $WriteLog "Could not retrieve adapter details for $NicName"
+      return $null
+    }
+    
+    # Get advanced properties for error counters (for future use)
+    # $advancedProps = Get-NetAdapterAdvancedProperty -Name $NicName -ErrorAction SilentlyContinue
+    
+    $linkHealth = @{
+      AdapterName = $NicName
+      LinkSpeed = $adapter.LinkSpeed
+      MediaConnectionState = $adapter.MediaConnectionState
+      Status = $adapter.Status
+      BytesReceived = $stats.BytesReceived
+      BytesSent = $stats.BytesSent
+      PacketsReceived = $stats.PacketsReceived
+      PacketsSent = $stats.PacketsSent
+      ReceivedErrors = $stats.ReceivedErrors
+      TransmitErrors = $stats.TransmitErrors
+      ReceivedDiscardPackets = $stats.ReceivedDiscardPackets
+      TransmittedDiscardPackets = $stats.TransmittedDiscardPackets
+      ReceivedUnicastPackets = $stats.ReceivedUnicastPackets
+      TransmittedUnicastPackets = $stats.TransmittedUnicastPackets
+      ReceivedMulticastPackets = $stats.ReceivedMulticastPackets
+      TransmittedMulticastPackets = $stats.TransmittedMulticastPackets
+      ReceivedBroadcastPackets = $stats.ReceivedBroadcastPackets
+      TransmittedBroadcastPackets = $stats.TransmittedBroadcastPackets
+    }
+    
+    # Log key metrics
+    & $WriteLog "Link Health Summary:"
+    & $WriteLog "  Speed: $($adapter.LinkSpeed) bps"
+    & $WriteLog "  Status: $($adapter.Status)"
+    & $WriteLog "  Media State: $($adapter.MediaConnectionState)"
+    & $WriteLog "  Rx Errors: $($stats.ReceivedErrors)"
+    & $WriteLog "  Tx Errors: $($stats.TransmitErrors)"
+    & $WriteLog "  Rx Drops: $($stats.ReceivedDiscardPackets)"
+    & $WriteLog "  Tx Drops: $($stats.TransmittedDiscardPackets)"
+    
+    # Check for concerning error rates
+    $totalPackets = $stats.PacketsReceived + $stats.PacketsSent
+    if ($totalPackets -gt 0) {
+      $errorRate = [Math]::Round((($stats.ReceivedErrors + $stats.TransmitErrors) / $totalPackets) * 100, 4)
+      & $WriteLog "  Error Rate: $errorRate%"
+      
+      if ($errorRate -gt 0.1) {
+        & $WriteLog "  WARNING: High error rate detected - possible cable or port issue"
+      }
+    }
+    
+    return $linkHealth
+    
+  } catch {
+    & $WriteLog "Error checking link health for $NicName`: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Get-AdapterDriverInfo {
+  param([string]$NicName, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Checking driver information for adapter: $NicName"
+    
+    # Get adapter details
+    $adapter = Get-NetAdapter -Name $NicName -ErrorAction SilentlyContinue
+    if (-not $adapter) {
+      & $WriteLog "Could not retrieve adapter details for $NicName"
+      return $null
+    }
+    
+    # Get PnP device information
+    $pnpDevice = Get-PnpDevice -InstanceId $adapter.PnPDeviceID -ErrorAction SilentlyContinue
+    if ($pnpDevice) {
+      & $WriteLog "Driver Information:"
+      & $WriteLog "  Device ID: $($adapter.PnPDeviceID)"
+      & $WriteLog "  Driver Version: $($adapter.DriverVersion)"
+      & $WriteLog "  Driver Date: $($adapter.DriverDate)"
+      & $WriteLog "  Driver Provider: $($adapter.DriverProvider)"
+      & $WriteLog "  Status: $($pnpDevice.Status)"
+      & $WriteLog "  Class: $($pnpDevice.Class)"
+      
+      return @{
+        PnPDeviceID = $adapter.PnPDeviceID
+        DriverVersion = $adapter.DriverVersion
+        DriverDate = $adapter.DriverDate
+        DriverProvider = $adapter.DriverProvider
+        DeviceStatus = $pnpDevice.Status
+        DeviceClass = $pnpDevice.Class
+      }
+    } else {
+      & $WriteLog "Could not retrieve PnP device information"
+      return $null
+    }
+    
+  } catch {
+    & $WriteLog "Error checking driver information for $NicName`: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-ONTAvailability {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing ONT (Optical Network Terminal) availability..."
+  
+  # Common ONT management IP addresses
+  $ontIPs = @('192.168.1.1', '192.168.100.1', '192.168.0.1', '10.0.0.1')
+  $ontResults = @()
+  
+  foreach ($ip in $ontIPs) {
+    try {
+      & $WriteLog "Testing ONT at $ip..."
+      $ping = Test-Connection -TargetName $ip -Count 2 -TimeoutSeconds 3 -ErrorAction Stop
+      if ($ping) {
+        $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
+        & $WriteLog "  ONT at $ip`: REACHABLE (${avgLatency}ms avg)"
+        $ontResults += @{ IP = $ip; Status = "REACHABLE"; Latency = $avgLatency }
+      }
+    } catch {
+      & $WriteLog "  ONT at $ip`: UNREACHABLE"
+      $ontResults += @{ IP = $ip; Status = "UNREACHABLE"; Latency = $null }
+    }
+  }
+  
+  # Check if any ONT is reachable
+  $reachableONTs = $ontResults | Where-Object { $_.Status -eq "REACHABLE" }
+  if ($reachableONTs.Count -gt 0) {
+    & $WriteLog "ONT Status: At least one ONT is reachable - local link appears OK"
+    return @{ Status = "OK"; ReachableONTs = $reachableONTs; AllResults = $ontResults }
+  } else {
+    & $WriteLog "ONT Status: No ONTs reachable - possible fibre or ONT issue"
+    return @{ Status = "FAIL"; ReachableONTs = @(); AllResults = $ontResults }
+  }
+}
+
+function Show-ONTLEDReminder {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog ""
+  & $WriteLog "=== ONT LED STATUS CHECK ==="
+  & $WriteLog "Please visually check your ONT (Optical Network Terminal) LEDs:"
+  & $WriteLog ""
+  & $WriteLog "Expected LED States:"
+  & $WriteLog "  PON (Power/Online): SOLID GREEN"
+  & $WriteLog "  LOS (Loss of Signal): OFF"
+  & $WriteLog "  LAN: SOLID GREEN (when connected)"
+  & $WriteLog ""
+  & $WriteLog "If you see:"
+  & $WriteLog "  - Blinking red LOS: Fibre cable issue or Openreach fault"
+  & $WriteLog "  - PON not solid green: ONT not syncing with network"
+  & $WriteLog "  - All LEDs off: Power issue"
+  & $WriteLog ""
+  & $WriteLog "Press Enter to continue after checking LEDs..."
+  Read-Host
+}
+
+function Get-PPPoESessionInfo {
+  param([string]$PppoeName, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Checking PPPoE session information for: $PppoeName"
+    
+    # Check Windows Event Log for PPPoE session events
+    $sessionEvents = Get-WinEvent -FilterHashtable @{
+      LogName = 'System'
+      ID = 20227
+      StartTime = (Get-Date).AddHours(-1)
+    } -ErrorAction SilentlyContinue | Where-Object {
+      $_.Message -match [regex]::Escape($PppoeName)
+    }
+    
+    if ($sessionEvents) {
+      & $WriteLog "Found $($sessionEvents.Count) recent PPPoE session events:"
+      foreach ($sessionEvent in $sessionEvents | Select-Object -First 5) {
+        $time = $sessionEvent.TimeCreated.ToString("HH:mm:ss")
+        $message = $sessionEvent.Message -replace '\s+', ' '
+        & $WriteLog "  [$time] $message"
+      }
+    } else {
+      & $WriteLog "No recent PPPoE session events found in Event Log"
+    }
+    
+    # Check for PPPoE service status
+    $pppoeService = Get-Service -Name "RasMan" -ErrorAction SilentlyContinue
+    if ($pppoeService) {
+      & $WriteLog "PPPoE Service (RasMan): $($pppoeService.Status)"
+    }
+    
+    return @{
+      SessionEvents = $sessionEvents
+      ServiceStatus = $pppoeService.Status
+    }
+    
+  } catch {
+    & $WriteLog "Error checking PPPoE session info: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-TCPConnectivity {
+  param([string]$TargetIP, [int]$Port, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Testing TCP connectivity to $TargetIP`:$Port..."
+    
+    $result = Test-NetConnection -ComputerName $TargetIP -Port $Port -InformationLevel Quiet -WarningAction SilentlyContinue
+    if ($result) {
+      & $WriteLog "TCP connection to $TargetIP`:$Port`: SUCCESS"
+      return @{ Status = "SUCCESS"; Target = "$TargetIP`:$Port" }
+    } else {
+      & $WriteLog "TCP connection to $TargetIP`:$Port`: FAILED"
+      return @{ Status = "FAILED"; Target = "$TargetIP`:$Port" }
+    }
+  } catch {
+    & $WriteLog "Error testing TCP connectivity to $TargetIP`:$Port`: $($_.Exception.Message)"
+    return @{ Status = "ERROR"; Target = "$TargetIP`:$Port"; Error = $_.Exception.Message }
+  }
+}
+
+function Test-MultiDestinationRouting {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing routing to multiple destinations..."
+  
+  $destinations = @(
+    @{ Name = "Google DNS"; IP = "8.8.8.8" },
+    @{ Name = "Cloudflare DNS"; IP = "1.1.1.1" },
+    @{ Name = "Quad9 DNS"; IP = "9.9.9.9" },
+    @{ Name = "OpenDNS"; IP = "208.67.222.222" }
+  )
+  
+  $results = @()
+  
+  foreach ($dest in $destinations) {
+    try {
+      & $WriteLog "Testing route to $($dest.Name) ($($dest.IP))..."
+      
+      # Test with tracert to see where traffic stops
+      $trace = tracert -d -h 8 -w 2000 $dest.IP 2>$null
+      $hops = $trace | Where-Object { $_ -match '^\s*\d+\s+' } | ForEach-Object {
+        if ($_ -match '^\s*\d+\s+.*?\s+(\d+\.\d+\.\d+\.\d+)') {
+          $matches[1]
+        }
+      }
+      
+      if ($hops -and $hops.Count -gt 0) {
+        $lastHop = $hops[-1]
+        if ($lastHop -eq $dest.IP) {
+          & $WriteLog "  Route to $($dest.Name): COMPLETE (reached destination)"
+          $results += @{ Destination = $dest.Name; IP = $dest.IP; Status = "COMPLETE"; LastHop = $lastHop }
+        } else {
+          & $WriteLog "  Route to $($dest.Name): PARTIAL (stopped at $lastHop)"
+          $results += @{ Destination = $dest.Name; IP = $dest.IP; Status = "PARTIAL"; LastHop = $lastHop }
+        }
+      } else {
+        & $WriteLog "  Route to $($dest.Name): FAILED (no response)"
+        $results += @{ Destination = $dest.Name; IP = $dest.IP; Status = "FAILED"; LastHop = $null }
+      }
+    } catch {
+      & $WriteLog "  Route to $($dest.Name): ERROR - $($_.Exception.Message)"
+      $results += @{ Destination = $dest.Name; IP = $dest.IP; Status = "ERROR"; LastHop = $null; Error = $_.Exception.Message }
+    }
+  }
+  
+  return $results
+}
+
+function Get-PPPGatewayInfo {
+  param([string]$InterfaceAlias, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Checking PPP gateway information for interface: $InterfaceAlias"
+    
+    # Get IP configuration for the PPP interface
+    $ipConfig = Get-NetIPConfiguration -InterfaceAlias $InterfaceAlias -ErrorAction SilentlyContinue
+    if ($ipConfig) {
+      & $WriteLog "PPP Interface Configuration:"
+      & $WriteLog "  IPv4 Address: $($ipConfig.IPv4Address.IPAddress)"
+      & $WriteLog "  Subnet Mask: $($ipConfig.IPv4Address.PrefixLength)"
+      & $WriteLog "  Gateway: $($ipConfig.IPv4DefaultGateway.NextHop)"
+      
+      # Check if gateway is reachable
+      if ($ipConfig.IPv4DefaultGateway.NextHop) {
+        $gateway = $ipConfig.IPv4DefaultGateway.NextHop
+        try {
+          $ping = Test-Connection -TargetName $gateway -Count 2 -TimeoutSeconds 2 -ErrorAction Stop
+          if ($ping) {
+            $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
+            & $WriteLog "  Gateway Reachability: OK (${avgLatency}ms avg)"
+            return @{ 
+              Status = "OK"; 
+              IPv4Address = $ipConfig.IPv4Address.IPAddress; 
+              Gateway = $gateway; 
+              GatewayLatency = $avgLatency 
+            }
+          } else {
+            & $WriteLog "  Gateway Reachability: FAILED"
+            return @{ 
+              Status = "FAIL"; 
+              IPv4Address = $ipConfig.IPv4Address.IPAddress; 
+              Gateway = $gateway; 
+              GatewayLatency = $null 
+            }
+          }
+        } catch {
+          & $WriteLog "  Gateway Reachability: ERROR - $($_.Exception.Message)"
+          return @{ 
+            Status = "ERROR"; 
+            IPv4Address = $ipConfig.IPv4Address.IPAddress; 
+            Gateway = $gateway; 
+            GatewayLatency = $null; 
+            Error = $_.Exception.Message 
+          }
+        }
+      } else {
+        & $WriteLog "  Gateway: NOT ASSIGNED"
+        return @{ 
+          Status = "NO_GATEWAY"; 
+          IPv4Address = $ipConfig.IPv4Address.IPAddress; 
+          Gateway = $null; 
+          GatewayLatency = $null 
+        }
+      }
+    } else {
+      & $WriteLog "Could not retrieve IP configuration for $InterfaceAlias"
+      return $null
+    }
+    
+  } catch {
+    & $WriteLog "Error checking PPP gateway info: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-FirewallState {
+  param([scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Checking Windows Firewall state..."
+    
+    $firewallProfiles = Get-NetFirewallProfile -ErrorAction SilentlyContinue
+    $firewallResults = @()
+    
+    foreach ($firewallProfile in $firewallProfiles) {
+      $status = if ($firewallProfile.Enabled) { "ENABLED" } else { "DISABLED" }
+      & $WriteLog "  $($firewallProfile.Name) Profile: $status"
+      $firewallResults += @{ Profile = $firewallProfile.Name; Enabled = $firewallProfile.Enabled }
+    }
+    
+    # Check for PPP-specific firewall rules
+    $pppRules = Get-NetFirewallRule -DisplayName "*PPP*" -ErrorAction SilentlyContinue
+    if ($pppRules) {
+      & $WriteLog "Found $($pppRules.Count) PPP-related firewall rules"
+      foreach ($rule in $pppRules | Select-Object -First 3) {
+        $action = if ($rule.Action -eq "Allow") { "ALLOW" } else { "BLOCK" }
+        & $WriteLog "  Rule: $($rule.DisplayName) - $action"
+      }
+    } else {
+      & $WriteLog "No PPP-specific firewall rules found"
+    }
+    
+    return @{
+      Profiles = $firewallResults
+      PPPRules = $pppRules
+    }
+    
+  } catch {
+    & $WriteLog "Error checking firewall state: $($_.Exception.Message)"
+    return $null
+  }
+}
+
 Export-ModuleMember -Function *
 
