@@ -100,9 +100,11 @@ function Disable-WiFiAdapters {
   param([scriptblock]$WriteLog)
   
   $wifiAdapters = Get-WiFiAdapters
+  $disabledAdapters = @()
+  
   if (-not $wifiAdapters) {
     & $WriteLog "No WiFi adapters found to disable"
-    return
+    return $disabledAdapters
   }
   
   foreach ($adapter in $wifiAdapters) {
@@ -111,6 +113,7 @@ function Disable-WiFiAdapters {
       try {
         Disable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
         & $WriteLog "WiFi adapter disabled: $($adapter.Name)"
+        $disabledAdapters += $adapter.Name
       } catch {
         & $WriteLog "Failed to disable WiFi adapter $($adapter.Name): $($_.Exception.Message)"
       }
@@ -118,28 +121,47 @@ function Disable-WiFiAdapters {
       & $WriteLog "WiFi adapter already disabled: $($adapter.Name)"
     }
   }
+  
+  return $disabledAdapters
 }
 
 function Enable-WiFiAdapters {
-  param([scriptblock]$WriteLog)
+  param(
+    [scriptblock]$WriteLog,
+    [string[]]$AdapterNames = @()
+  )
   
-  $wifiAdapters = Get-WiFiAdapters
-  if (-not $wifiAdapters) {
-    & $WriteLog "No WiFi adapters found to enable"
-    return
-  }
-  
-  foreach ($adapter in $wifiAdapters) {
-    if ($adapter.Status -eq 'Disabled') {
-      & $WriteLog "Enabling WiFi adapter: $($adapter.Name)"
+  if ($AdapterNames -and $AdapterNames.Count -gt 0) {
+    # Enable specific adapters
+    foreach ($adapterName in $AdapterNames) {
+      & $WriteLog "Re-enabling WiFi adapter: $adapterName"
       try {
-        Enable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
-        & $WriteLog "WiFi adapter enabled: $($adapter.Name)"
+        Enable-NetAdapter -Name $adapterName -Confirm:$false -ErrorAction Stop
+        & $WriteLog "WiFi adapter re-enabled: $adapterName"
       } catch {
-        & $WriteLog "Failed to enable WiFi adapter $($adapter.Name): $($_.Exception.Message)"
+        & $WriteLog "Failed to re-enable WiFi adapter $adapterName`: $($_.Exception.Message)"
       }
-    } else {
-      & $WriteLog "WiFi adapter already enabled: $($adapter.Name)"
+    }
+  } else {
+    # Enable all WiFi adapters
+    $wifiAdapters = Get-WiFiAdapters
+    if (-not $wifiAdapters) {
+      & $WriteLog "No WiFi adapters found to enable"
+      return
+    }
+    
+    foreach ($adapter in $wifiAdapters) {
+      if ($adapter.Status -eq 'Disabled') {
+        & $WriteLog "Enabling WiFi adapter: $($adapter.Name)"
+        try {
+          Enable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+          & $WriteLog "WiFi adapter enabled: $($adapter.Name)"
+        } catch {
+          & $WriteLog "Failed to enable WiFi adapter $($adapter.Name): $($_.Exception.Message)"
+        }
+      } else {
+        & $WriteLog "WiFi adapter already enabled: $($adapter.Name)"
+      }
     }
   }
 }

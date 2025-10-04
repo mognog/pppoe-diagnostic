@@ -68,9 +68,12 @@ try {
   }
 
   # Display final results summary
-    Write-Log ""
-  Write-Log "=== DIAGNOSTIC COMPLETED ==="
+  Write-Log ""
+  Write-Log "=== FINAL HEALTH SUMMARY ==="
   if ($result) {
+    Write-HealthSummary -Health $result.Health
+    Write-Log ""
+    Write-Log "=== DIAGNOSTIC COMPLETED ==="
     Write-Log "Health checks completed: $($result.Health.Count) total"
     Write-Log "Selected adapter: $($result.Adapter.Name)"
     if ($result.PPPInterface) {
@@ -79,6 +82,8 @@ try {
     if ($result.PPPIP) {
       Write-Log "PPP IP address: $($result.PPPIP.IPAddress)"
     }
+  } else {
+    Write-Log "Diagnostic failed - no results available"
   }
 
 } catch {
@@ -99,6 +104,12 @@ try {
     Write-Log "Could not determine WiFi adapter cleanup requirements"
   }
   
+  # Show a minimal health summary even if diagnostics failed
+  Write-Log ""
+  Write-Log "=== FINAL HEALTH SUMMARY ==="
+  Write-Log "[1] PowerShell version .......... OK ($($PSVersionTable.PSVersion))"
+  Write-Log "[2] Diagnostic execution ........ FAIL (fatal error occurred)"
+  Write-Log "OVERALL: FAIL"
 } finally {
   # Always perform cleanup operations
   Write-Log ""

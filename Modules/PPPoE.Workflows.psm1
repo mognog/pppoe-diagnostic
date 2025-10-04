@@ -17,6 +17,11 @@ function Invoke-PPPoEDiagnosticWorkflow {
   # Initialize health tracking
   $Health = New-Health
   
+  # Initialize variables to prevent undefined variable errors
+  $pppInterface = $null
+  $pppIP = $null
+  $connectionResult = $null
+  
   # Check and manage WiFi adapters
   $disabledWiFiAdapters = @()
   if (-not $SkipWifiToggle) {
@@ -116,13 +121,10 @@ function Invoke-PPPoEDiagnosticWorkflow {
     }
   }
 
-  # Phase 9: Final Summary (cleanup handled by main script)
+  # Phase 9: Disconnect PPPoE connection unless KeepPPP is specified
   & $WriteLog ""
-  & $WriteLog "=== FINAL SUMMARY ==="
-  
-  # Disconnect PPPoE connection unless KeepPPP is specified
+  & $WriteLog "Disconnecting PPPoE connection..."
   if (-not $KeepPPP) {
-    & $WriteLog "Disconnecting PPPoE connection..."
     if ($pppoeConnections -and $pppoeConnections.Count -gt 0) {
       Disconnect-PPP -PppoeName $pppoeConnections[0]
     } else {
@@ -131,11 +133,6 @@ function Invoke-PPPoEDiagnosticWorkflow {
   } else {
     & $WriteLog "Keeping PPPoE connection active (KeepPPP specified)"
   }
-
-  # Write final health summary
-  & $WriteLog ""
-  & $WriteLog "=== FINAL HEALTH SUMMARY ==="
-  Write-HealthSummary -Health $Health
 
   return @{
     Health = $Health
@@ -158,6 +155,10 @@ function Invoke-QuickDiagnosticWorkflow {
   
   # Initialize health tracking
   $Health = New-Health
+  
+  # Initialize variables to prevent undefined variable errors
+  $pppInterface = $null
+  $pppIP = $null
   
   # Quick system checks
   & $WriteLog "=== QUICK DIAGNOSTIC WORKFLOW ==="
@@ -196,9 +197,6 @@ function Invoke-QuickDiagnosticWorkflow {
       }
     }
   }
-
-  # Write summary
-  Write-HealthSummary -Health $Health
 
   return @{
     Health = $Health
