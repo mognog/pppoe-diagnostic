@@ -1,7 +1,7 @@
 
 # PPPoE.Health.psm1 - Health checks and summary
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 
 function New-Health {
   return [ordered]@{}

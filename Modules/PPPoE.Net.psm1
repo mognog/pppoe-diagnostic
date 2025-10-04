@@ -1,7 +1,7 @@
 
 # PPPoE.Net.psm1 - NIC and PPP operations
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 
 function Get-CandidateEthernetAdapters {
   $eth = Get-NetAdapter -Physical | Where-Object { $_.MediaType -match '802\.3' -or $_.Name -match 'Ethernet' }
@@ -620,11 +620,11 @@ function Test-QuickConnectivityCheck {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
       if ($ping) {
         $results += @{ Test = $i; Success = $true; Latency = $ping.ResponseTime }
-        & $WriteLog "  Test $i: OK (${ping.ResponseTime}ms)"
+        & $WriteLog "  Test $($i): OK ($($ping.ResponseTime)ms)"
       }
     } catch {
       $results += @{ Test = $i; Success = $false; Latency = $null }
-      & $WriteLog "  Test $i: FAIL"
+      & $WriteLog "  Test $($i): FAIL"
     }
     Start-Sleep -Milliseconds 50
   }

@@ -1,7 +1,7 @@
 
 # PPPoE.Core.psm1 - helpers, transcript & ASCII
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 
 function Start-AsciiTranscript {
   param([string]$Path)

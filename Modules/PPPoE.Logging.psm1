@@ -1,7 +1,7 @@
 
 # PPPoE.Logging.psm1 - banners & helpers
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 
 function Show-Banner {
 @"

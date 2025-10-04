@@ -24,6 +24,9 @@ param(
   [switch]$KeepPPP
 )
 
+# CORRECT: Use strict mode version 3.0 (catches bugs but allows optional parameters)
+Set-StrictMode -Version 3.0
+
 # Rest of script...
 ```
 
@@ -93,6 +96,9 @@ param([string]$UserName)  # ❌ This will fail
 # WRONG: Set-StrictMode -Version Latest with optional parameters
 Set-StrictMode -Version Latest  # ❌ Causes "variable not set" errors
 
+# WRONG: No strict mode at all (hides important bugs)
+# Set-StrictMode commented out  # ❌ Allows typos and undefined variables
+
 # WRONG: Complex delayed expansion in CMD
 set "VAR=value"
 echo !VAR!  # ❌ Can cause "was was unexpected at this time"
@@ -130,8 +136,9 @@ powershell -Command "Start-Process -FilePath '!PWSH!' -ArgumentList '-NoProfile'
 
 ### "The variable '$UserName' cannot be retrieved because it has not been set"
 - **Cause**: `Set-StrictMode -Version Latest` with optional parameters
-- **Fix**: Use `Set-StrictMode -Version 3.0` or comment out strict mode entirely
+- **Fix**: Use `Set-StrictMode -Version 3.0` (recommended - catches bugs while allowing optional parameters)
 - **Alternative**: Move param() block to very top of script
+- **Last Resort**: Comment out strict mode entirely (NOT recommended - hides important bugs)
 
 ### "Cannot index into a null array"
 - **Cause**: Array indexing without checking if array exists and has elements
