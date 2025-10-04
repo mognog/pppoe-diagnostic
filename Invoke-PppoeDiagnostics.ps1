@@ -74,7 +74,7 @@ try {
     $credentialsFile = Join-Path $here "credentials.ps1"
     if (Test-Path $credentialsFile) {
       try {
-        Write-Log "[DEBUG] Found credentials file, loading external credentials"
+        Write-Log "Found credentials file, loading external credentials"
         . $credentialsFile
         # Check if credentials are actually provided (not null or empty)
         if ($PPPoE_Username -and $PPPoE_Password -and 
@@ -87,7 +87,7 @@ try {
           $Health = Add-Health $Health 'Credentials source' "OK (Loaded from credentials.ps1 for: $UserName)" 3
           Write-Log "Loaded credentials from file for user: $UserName"
         } else {
-          Write-Log "[DEBUG] Credentials file exists but values are empty/null, no credentials found"
+          Write-Log "Credentials file exists but values are empty/null, no credentials found"
           $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
           Write-Log "No credentials found - attempting connection without explicit credentials"
         }
@@ -104,13 +104,13 @@ try {
     Write-Warn "No PPPoE connections configured in Windows"
     $Health = Add-Health $Health 'PPPoE connections configured' 'WARN (none found)' 2
     $Health = Add-Health $Health 'Credentials source' 'N/A' 3
-    Write-Log "[DEBUG] Tested connection names: $($testConnections -join ', ')"
-    Write-Log "[DEBUG] Available network connections:"
+    Write-Log "Tested connection names: $($testConnections -join ', ')"
+    Write-Log "Available network connections:"
     try {
       $allConnections = Get-NetConnectionProfile | Select-Object -ExpandProperty Name
-      Write-Log "[DEBUG] $($allConnections -join ', ')"
+      Write-Log "$($allConnections -join ', ')"
     } catch {
-      Write-Log "[DEBUG] Could not retrieve network connections list"
+      Write-Log "Could not retrieve network connections list"
     }
   }
 
