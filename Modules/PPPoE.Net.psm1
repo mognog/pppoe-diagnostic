@@ -10,8 +10,17 @@ function Get-CandidateEthernetAdapters {
 
 function Get-RecommendedAdapter {
   $list = Get-CandidateEthernetAdapters
+  # Ensure we have an array to work with
+  if ($list -and -not ($list -is [array])) {
+    $list = @($list)
+  }
+  
   # Prefer 'USB', 'Realtek', 'Sabrent', '5GbE' if present
   $pref = $list | Where-Object { $_.InterfaceDescription -match 'Realtek|Sabrent|USB|5G' }
+  if ($pref -and -not ($pref -is [array])) {
+    $pref = @($pref)
+  }
+  
   if ($pref -and $pref.Count -gt 0) { return $pref[0] }
   if ($list -and $list.Count -gt 0) { return $list[0] }
   return $null
@@ -21,7 +30,12 @@ function Select-NetworkAdapter {
   param([scriptblock]$WriteLog)
   
   $adapters = Get-CandidateEthernetAdapters
-  if ($adapters.Count -eq 0) {
+  # Ensure we have an array to work with
+  if ($adapters -and -not ($adapters -is [array])) {
+    $adapters = @($adapters)
+  }
+  
+  if (-not $adapters -or $adapters.Count -eq 0) {
     & $WriteLog "No Ethernet adapters found"
     return $null
   }
@@ -325,6 +339,46 @@ function Test-DefaultRouteVia {
          Select-Object -First 1
   if (-not $def) { return $false }
   return ($def.InterfaceIndex -eq $IfIndex)
+}
+
+function Get-DefaultRouteOwner {
+  param([scriptblock]$WriteLog)
+  
+  try {
+    $def = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+           Sort-Object -Property RouteMetric |
+           Select-Object -First 1
+    
+    if (-not $def) {
+      & $WriteLog "No default route found"
+      return $null
+    }
+    
+    $interface = Get-NetAdapter -InterfaceIndex $def.InterfaceIndex -ErrorAction SilentlyContinue
+    if ($interface) {
+      $ownerInfo = "$($interface.Name) ($($interface.InterfaceDescription)) - Metric: $($def.RouteMetric)"
+      & $WriteLog "Current default route owner: $ownerInfo"
+      return @{
+        InterfaceIndex = $def.InterfaceIndex
+        InterfaceName = $interface.Name
+        InterfaceDescription = $interface.InterfaceDescription
+        RouteMetric = $def.RouteMetric
+        NextHop = $def.NextHop
+      }
+    } else {
+      & $WriteLog "Default route found but interface details unavailable (Index: $($def.InterfaceIndex))"
+      return @{
+        InterfaceIndex = $def.InterfaceIndex
+        InterfaceName = "Unknown"
+        InterfaceDescription = "Interface not found"
+        RouteMetric = $def.RouteMetric
+        NextHop = $def.NextHop
+      }
+    }
+  } catch {
+    & $WriteLog "Error getting default route owner: $($_.Exception.Message)"
+    return $null
+  }
 }
 
 function Test-DNSResolution {
@@ -708,6 +762,137 @@ function Test-ProviderSpecificDiagnostics {
   }
   
   return $diagnostics
+}
+
+function Get-WiFiAdapters {
+  param([scriptblock]$WriteLog)
+  
+  try {
+    $wifiAdapters = Get-NetAdapter -Physical | Where-Object { 
+      $_.InterfaceDescription -match 'wireless|wifi|802\.11|wi-fi' -or 
+      $_.Name -match 'wireless|wifi|wi-fi' 
+    }
+    
+    if ($wifiAdapters) {
+      $count = if ($wifiAdapters -is [array]) { $wifiAdapters.Count } else { 1 }
+      & $WriteLog "Found $count WiFi adapter(s):"
+      foreach ($adapter in $wifiAdapters) {
+        $status = if ($adapter.Status -eq 'Up') { "ENABLED" } else { "DISABLED" }
+        & $WriteLog "  - $($adapter.Name) ($($adapter.InterfaceDescription)) - $status"
+      }
+    } else {
+      & $WriteLog "No WiFi adapters found"
+    }
+    
+    return $wifiAdapters
+  } catch {
+    & $WriteLog "Error detecting WiFi adapters: $($_.Exception.Message)"
+    return @()
+  }
+}
+
+function Disable-WiFiAdapters {
+  param([scriptblock]$WriteLog)
+  
+  $wifiAdapters = Get-WiFiAdapters -WriteLog $WriteLog
+  $disabledAdapters = @()
+  
+  # Ensure we have an array to iterate over
+  if ($wifiAdapters -and -not ($wifiAdapters -is [array])) {
+    $wifiAdapters = @($wifiAdapters)
+  }
+  
+  foreach ($adapter in $wifiAdapters) {
+    if ($adapter.Status -eq 'Up') {
+      try {
+        & $WriteLog "Disabling WiFi adapter: $($adapter.Name)"
+        Disable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+        $disabledAdapters += $adapter
+        & $WriteLog "Successfully disabled: $($adapter.Name)"
+      } catch {
+        & $WriteLog "Failed to disable $($adapter.Name): $($_.Exception.Message)"
+      }
+    } else {
+      & $WriteLog "WiFi adapter already disabled: $($adapter.Name)"
+    }
+  }
+  
+  return $disabledAdapters
+}
+
+function Enable-WiFiAdapters {
+  param([scriptblock]$WriteLog, [array]$AdaptersToEnable)
+  
+  if (-not $AdaptersToEnable -or $AdaptersToEnable.Count -eq 0) {
+    & $WriteLog "No WiFi adapters to re-enable"
+    return
+  }
+  
+  foreach ($adapter in $AdaptersToEnable) {
+    try {
+      & $WriteLog "Re-enabling WiFi adapter: $($adapter.Name)"
+      Enable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+      & $WriteLog "Successfully re-enabled: $($adapter.Name)"
+    } catch {
+      & $WriteLog "Failed to re-enable $($adapter.Name): $($_.Exception.Message)"
+    }
+  }
+}
+
+function Set-RouteMetrics {
+  param([int]$PppInterfaceIndex, [scriptblock]$WriteLog)
+  
+  try {
+    & $WriteLog "Adjusting route metrics to prefer PPP interface..."
+    
+    # Get the PPP interface
+    $pppInterface = Get-NetAdapter -InterfaceIndex $PppInterfaceIndex -ErrorAction SilentlyContinue
+    if (-not $pppInterface) {
+      & $WriteLog "Could not find PPP interface with index $PppInterfaceIndex"
+      return $false
+    }
+    
+    # Set PPP interface metric to 1 (highest priority)
+    try {
+      Set-NetIPInterface -InterfaceIndex $PppInterfaceIndex -InterfaceMetric 1 -ErrorAction Stop
+      & $WriteLog "Set PPP interface metric to 1 (highest priority)"
+    } catch {
+      & $WriteLog "Failed to set PPP interface metric: $($_.Exception.Message)"
+    }
+    
+    # Get all other network adapters and increase their metrics
+    $otherAdapters = Get-NetAdapter -Physical | Where-Object { $_.InterfaceIndex -ne $PppInterfaceIndex }
+    
+    foreach ($adapter in $otherAdapters) {
+      try {
+        $currentMetric = (Get-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric
+        if ($currentMetric -and $currentMetric -lt 10) {
+          $newMetric = $currentMetric + 10
+          Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -InterfaceMetric $newMetric -ErrorAction Stop
+          & $WriteLog "Increased metric for $($adapter.Name) from $currentMetric to $newMetric"
+        }
+      } catch {
+        & $WriteLog "Could not adjust metric for $($adapter.Name): $($_.Exception.Message)"
+      }
+    }
+    
+    # Wait a moment for routes to update
+    Start-Sleep -Seconds 2
+    
+    # Verify the change
+    $newDefaultRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object -Property RouteMetric | Select-Object -First 1
+    if ($newDefaultRoute -and $newDefaultRoute.InterfaceIndex -eq $PppInterfaceIndex) {
+      & $WriteLog "SUCCESS: Default route now uses PPP interface"
+      return $true
+    } else {
+      & $WriteLog "WARNING: Default route still not using PPP interface after metric adjustment"
+      return $false
+    }
+    
+  } catch {
+    & $WriteLog "Error adjusting route metrics: $($_.Exception.Message)"
+    return $false
+  }
 }
 
 Export-ModuleMember -Function *

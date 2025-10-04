@@ -30,6 +30,20 @@ try {
   Write-Log "PowerShell version: $($PSVersionTable.PSVersion)"
   Write-Log "Script path: $($MyInvocation.MyCommand.Path)"
 
+  # Check and manage WiFi adapters
+  $disabledWiFiAdapters = @()
+  if (-not $SkipWifiToggle) {
+    Write-Log "Checking WiFi adapter status..."
+    $disabledWiFiAdapters = Disable-WiFiAdapters -WriteLog ${function:Write-Log}
+    if ($disabledWiFiAdapters.Count -gt 0) {
+      Write-Log "Temporarily disabled $($disabledWiFiAdapters.Count) WiFi adapter(s) to prevent interference"
+    } else {
+      Write-Log "No WiFi adapters were active or found"
+    }
+  } else {
+    Write-Log "Skipping WiFi adapter management (SkipWifiToggle specified)"
+  }
+
   # Disconnect any existing PPPoE connections to start clean
   Write-Log "Disconnecting any existing PPPoE connections..."
   Disconnect-AllPPPoE
@@ -231,6 +245,9 @@ try {
           Write-Log "No valid IPv4 address found on PPP interface"
         }
 
+        # Check current default route owner before testing
+        Get-DefaultRouteOwner -WriteLog ${function:Write-Log} | Out-Null
+        
         $defViaPPP = Test-DefaultRouteVia -IfIndex $pppIf.InterfaceIndex
         if ($defViaPPP) {
           $Health = Add-Health $Health 'Default route via PPP' 'OK' 15
@@ -238,6 +255,18 @@ try {
         } else {
           $Health = Add-Health $Health 'Default route via PPP' 'WARN (still via other interface)' 15
           Write-Log "Default route is NOT via PPP interface"
+          
+          # Try to adjust route metrics to prefer PPP interface
+          Write-Log "Attempting to adjust route metrics to prefer PPP interface..."
+          $metricAdjustmentSuccess = Set-RouteMetrics -PppInterfaceIndex $pppIf.InterfaceIndex -WriteLog ${function:Write-Log}
+          
+          if ($metricAdjustmentSuccess) {
+            $Health = Add-Health $Health 'Route metric adjustment' 'OK (PPP interface preferred)' 15.5
+            Write-Log "Route metrics successfully adjusted to prefer PPP interface"
+          } else {
+            $Health = Add-Health $Health 'Route metric adjustment' 'WARN (Could not adjust metrics)' 15.5
+            Write-Log "Could not adjust route metrics to prefer PPP interface"
+          }
         }
       } else {
         Write-Log "No connected PPP interface found"
@@ -476,6 +505,13 @@ try {
   Write-Err "Fatal error: $($_.Exception.Message)"
 } finally {
   if (-not $KeepPPP) { Disconnect-PPP -PppoeName $PppoeName }
+  
+  # Re-enable WiFi adapters if they were disabled
+  if (-not $SkipWifiToggle -and $disabledWiFiAdapters.Count -gt 0) {
+    Write-Log "Re-enabling WiFi adapters..."
+    Enable-WiFiAdapters -WriteLog ${function:Write-Log} -AdaptersToEnable $disabledWiFiAdapters
+  }
+  
   Write-Log ""
   Write-HealthSummary -Health $Health
   Write-Log "Transcript saved to $logPath"
