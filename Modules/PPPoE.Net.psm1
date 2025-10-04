@@ -17,7 +17,7 @@ function Get-RecommendedAdapter {
   return $null
 }
 
-function Ensure-LinkUp {
+function Test-LinkUp {
   param([string]$AdapterName)
   $nic = Get-NetAdapter -Name $AdapterName -ErrorAction Stop
   if ($nic.Status -ne 'Up' -or $nic.LinkSpeed -eq 0) {

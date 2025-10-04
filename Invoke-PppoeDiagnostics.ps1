@@ -131,7 +131,7 @@ try {
   }
 
   # [4] Link state gate
-  if (Ensure-LinkUp -AdapterName $nic.Name) {
+  if (Test-LinkUp -AdapterName $nic.Name) {
     $Health = Add-Health $Health 'Ethernet link state' 'OK (Up)' 4
   } else {
     Write-Err "Ethernet link is down (0 bps / Disconnected)"
