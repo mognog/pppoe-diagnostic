@@ -69,37 +69,9 @@ try {
     Write-Ok "Found existing PPPoE connections: $($pppoeConnections -join ', ')"
     $Health = Add-Health $Health 'PPPoE connections configured' "OK ($($pppoeConnections.Count) found: $($pppoeConnections -join ', '))" 2
     
-    # [2.5] Check for credentials immediately after finding connections
-    # Check for external credentials file first
+    # [2.5] Credentials will be handled during connection attempt with fallback logic
     $credentialsFile = Join-Path $here "credentials.ps1"
-    if (Test-Path $credentialsFile) {
-      try {
-        Write-Log "Found credentials file, loading external credentials"
-        . $credentialsFile
-        # Check if credentials are actually provided (not null or empty)
-        if ($PPPoE_Username -and $PPPoE_Password -and 
-            $PPPoE_Username.Trim() -ne '' -and $PPPoE_Password.Trim() -ne '') {
-          $UserName = $PPPoE_Username
-          $Password = $PPPoE_Password
-          if ($PPPoE_ConnectionName -and $PPPoE_ConnectionName.Trim() -ne '') {
-            $PppoeName = $PPPoE_ConnectionName
-          }
-          $Health = Add-Health $Health 'Credentials source' "OK (Loaded from credentials.ps1 for: $UserName)" 3
-          Write-Log "Loaded credentials from file for user: $UserName"
-        } else {
-          Write-Log "Credentials file exists but values are empty/null, no credentials found"
-          $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
-          Write-Log "No credentials found - attempting connection without explicit credentials"
-        }
-      } catch {
-        Write-Log "[WARN] Failed to load credentials from file: $($_.Exception.Message)"
-        $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
-        Write-Log "No credentials found - attempting connection without explicit credentials"
-      }
-    } else {
-      $Health = Add-Health $Health 'Credentials source' 'OK (No credentials found - will attempt connection without explicit credentials)' 3
-      Write-Log "No credentials found - attempting connection without explicit credentials"
-    }
+    Write-Log "Credential sources available: Windows saved, credentials.ps1 file, script parameters"
   } else {
     Write-Warn "No PPPoE connections configured in Windows"
     $Health = Add-Health $Health 'PPPoE connections configured' 'WARN (none found)' 2
@@ -136,6 +108,7 @@ try {
   } else {
     Write-Err "Ethernet link is down (0 bps / Disconnected)"
     $Health = Add-Health $Health 'Ethernet link state' 'FAIL (Down)' 4
+    Write-Log "No physical connection, authentication aborted"
     # Skip PPP attempt if link is down - set all remaining checks to N/A
     $Health = Add-Health $Health 'Credentials source' 'N/A' 11
     $Health = Add-Health $Health 'PPPoE authentication' 'N/A' 12
@@ -147,46 +120,44 @@ try {
     $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
     $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
     $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
-    # Don't return early - let the script continue to show the complete health summary
+    # Skip to health summary - no point in attempting connection without link
+    $linkDown = $true
   }
 
-  # Clean previous PPP state
-  Disconnect-PPP -PppoeName $PppoeName
+  # Only attempt PPPoE connection if Ethernet link is up
+  if (-not $linkDown) {
+    # Clean previous PPP state
+    Disconnect-PPP -PppoeName $PppoeName
 
-  # Determine if we should use saved credentials or provided ones
-  $useSaved = $false
-  if ([string]::IsNullOrWhiteSpace($UserName) -or [string]::IsNullOrWhiteSpace($Password)) {
-    $useSaved = $true
-  }
+    # Connect with fallback credential attempts
+    Write-Log "Starting PPPoE connection attempts with fallback credential sources..."
+    $res = Connect-PPPWithFallback -PppoeName $PppoeName -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog ${function:Write-Log} -AddHealth ${function:Add-Health}
+    $out = ($res.Output -replace '[^\x00-\x7F]', '?')
+    Write-Log "Final connection result: Method=$($res.Method), Success=$($res.Success), ExitCode=$($res.Code)"
+    Write-Log "rasdial output:`n$out"
 
-  # Connect
-  Write-Log "Attempting PPPoE connect: $PppoeName (SavedCreds=$useSaved)"
-  $res = Connect-PPP -PppoeName $PppoeName -UserName $UserName -Password $Password -UseSaved:$useSaved
-  $out = ($res.Output -replace '[^\x00-\x7F]', '?')
-  Write-Log "rasdial exit=$($res.Code) output:`n$out"
-
-  # Map rasdial errors
-  $authOk = $false
-  if ($res.Success) { 
-    $authOk = $true 
-    $Health = Add-Health $Health 'PPPoE authentication' 'OK' 12
-  } else {
-    $reason = switch ($res.Code) {
-      691 { '691 bad credentials' }
-      651 { '651 modem (device) error' }
-      619 { '619 port disconnected' }
-      678 { '678 no answer (no PADO)' }
-      default { "code $($res.Code)" }
+    # Map rasdial errors
+    $authOk = $res.Success
+    if ($authOk) { 
+      $Health = Add-Health $Health 'PPPoE authentication' 'OK' 12
+    } else {
+      $reason = switch ($res.Code) {
+        691 { '691 bad credentials' }
+        651 { '651 modem (device) error' }
+        619 { '619 port disconnected' }
+        678 { '678 no answer (no PADO)' }
+        default { "code $($res.Code)" }
+      }
+      $Health = Add-Health $Health 'PPPoE authentication' ("FAIL ($reason)") 12
     }
-    $Health = Add-Health $Health 'PPPoE authentication' ("FAIL ($reason)") 12
   }
 
-  # Validate PPP interface materialization
+  # Validate PPP interface materialization (only if link is up and we attempted connection)
   $pppIf = $null
   $pppIP = $null
   $defViaPPP = $false
 
-  if ($authOk) {
+  if (-not $linkDown -and $authOk) {
     $pppIf = Get-PppInterface -PppoeName $PppoeName
     if ($pppIf -and $pppIf.ConnectionState -eq 'Connected') {
       $Health = Add-Health $Health 'PPP interface present' ("OK (IfIndex $($pppIf.InterfaceIndex), '$($pppIf.InterfaceAlias)')") 13
@@ -209,13 +180,16 @@ try {
       $Health = Add-Health $Health 'Default route via PPP' 'FAIL (no interface)' 15
     }
   } else {
-    $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
-    $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
-    $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15
+    if (-not $linkDown) {
+      # Link is up but authentication failed
+      $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
+      $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
+      $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15
+    }
   }
 
-  # Public IP classification & gateway reachability
-  if ($pppIP) {
+  # Public IP classification & gateway reachability (only if we have a PPP interface)
+  if (-not $linkDown -and $pppIP) {
     $cls = Get-IpClass -IPv4 $pppIP.IPAddress
     switch ($cls) {
       'PUBLIC' { $Health = Add-Health $Health 'Public IP classification' 'OK (Public)' 16 }
@@ -255,11 +229,14 @@ try {
     }
 
   } else {
-    $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
-    $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
-    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
-    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
-    $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
+    if (-not $linkDown) {
+      # Link is up but no PPP interface/IP
+      $Health = Add-Health $Health 'Public IP classification' 'N/A' 16
+      $Health = Add-Health $Health 'Gateway reachability' 'N/A' 17
+      $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'N/A' 18
+      $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'N/A' 19
+      $Health = Add-Health $Health 'MTU probe (DF)' 'N/A' 20
+    }
   }
 
 } catch {

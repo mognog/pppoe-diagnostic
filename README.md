@@ -11,9 +11,10 @@ This diagnostic tool helps you troubleshoot PPPoE (Point-to-Point Protocol over 
 
 - **Complete PPPoE Health Check**: Tests every aspect of your PPPoE connection from physical adapter to internet connectivity
 - **Stage-by-stage Health Summary**: Each step shows PASS/FAIL/WARN status with detailed explanations
+- **Intelligent Credential Fallback**: Automatically tries Windows saved credentials → credentials.ps1 file → script parameters
+- **Smart Link-state Validation**: Skips authentication attempts when Ethernet link is down (saves time and provides clear feedback)
 - **Robust Connection Validation**: Ensures authenticated PPP interface exists with proper IP assignment and routing
-- **Link-state Validation**: Won't attempt PPP connection if your network adapter is down or has no link
-- **Credential Management**: Shows whether saved or supplied credentials were used; maps authentication errors
+- **Clear Authentication Feedback**: Shows exactly which credential method succeeded and why others failed
 - **Public IP Detection**: Identifies Public/Private/CGNAT/APIPA IP addresses with appropriate warnings
 - **Provider-agnostic**: Works with any ISP - no hardcoded provider names
 - **Safe Operation**: Automatically restores network adapters and cleanly disconnects after testing
@@ -94,23 +95,42 @@ pppoe-diagnostic/
 
 ## Credential Management
 
-The script offers flexible credential handling to suit different scenarios:
+The script uses an intelligent **fallback credential system** that tries multiple credential sources in order of preference:
 
-### Method 1: Use Saved Credentials (Recommended)
-When you create your PPPoE connection in Windows, you can save your username and password. The script will automatically use these saved credentials:
+### Automatic Fallback Order
 
-```powershell
-.\Invoke-PppoeDiagnostics.ps1 -PppoeName 'MyISP' -FullLog
+1. **🥇 Windows Saved Credentials** (Most Common)
+   - Uses credentials saved in your Windows PPPoE connection
+   - **Display**: "SUCCESS: Connected using Windows saved credentials"
+   - **Advantages**: No need to type credentials, stored securely by Windows
+
+2. **🥈 External credentials.ps1 File** (Development/Testing)
+   - Loads credentials from `credentials.ps1` file in the script directory
+   - **Display**: "SUCCESS: Connected using credentials from file"
+   - **Advantages**: Not committed to Git, easy to update, can be shared securely
+
+3. **🥉 Script Parameters** (Manual Override)
+   - Uses `-UserName` and `-Password` parameters passed to the script
+   - **Display**: "SUCCESS: Connected using script parameters"
+   - **Use when**: Testing different credentials or saved credentials are incorrect
+
+### How It Works
+
+The script **automatically tries each method in order** and **stops on the first successful connection**:
+
+```
+[2025-10-04 12:20:49] Starting PPPoE connection attempts with fallback credential sources...
+[2025-10-04 12:20:49] Attempt 1: Trying Windows saved credentials for connection 'Rise PPPoE'
+[2025-10-04 12:20:49] SUCCESS: Connected using Windows saved credentials
+[2025-10-04 12:20:49] Final connection result: Method=Windows Saved, Success=True, ExitCode=0
 ```
 
-**Advantages:**
-- No need to type credentials each time
-- Credentials are stored securely by Windows
-- Faster execution
+### Setting Up Credentials
 
-**Note:** Due to Windows security restrictions, the script cannot display the saved username (it will show "Using saved Windows credentials"). This is normal and expected behavior.
+#### Option 1: Windows Saved Credentials (Recommended)
+When you create your PPPoE connection in Windows, save your credentials there. The script will use them automatically.
 
-### Method 2: Use External Credentials File (Recommended for Development)
+#### Option 2: External credentials.ps1 File
 Create a `credentials.ps1` file in the same directory as the script:
 
 ```powershell
@@ -120,26 +140,12 @@ $PPPoE_Password = 'your_password_here'
 $PPPoE_ConnectionName = 'Rise PPPoE'
 ```
 
-**Advantages:**
-- Credentials are never committed to Git (file is in .gitignore)
-- Easy to update without modifying the main script
-- Can be shared securely outside of version control
-- **Smart fallback**: If the file exists but has empty values, it automatically falls back to saved Windows credentials
-
-### Method 3: Provide Credentials as Parameters
-You can pass credentials directly to the script:
+#### Option 3: Script Parameters
+Pass credentials directly to the script:
 
 ```powershell
 .\Invoke-PppoeDiagnostics.ps1 -PppoeName 'MyISP' -UserName 'user@isp.com' -Password 'mypassword' -FullLog
 ```
-
-**Use this when:**
-- Testing with different credentials
-- Saved credentials are incorrect
-- You want to avoid saving credentials in Windows
-
-### Method 4: Hybrid Approach
-The script is smart - if you provide some parameters but not others, it will use what you provide and fall back to saved credentials for the rest.
 
 ## Why Can't We Extract Saved Credentials?
 
@@ -172,19 +178,19 @@ The main diagnostic script accepts several parameters:
 
 The tool generates a comprehensive health summary showing the status of each diagnostic step. Here's what to look for:
 
-### Example: Failed Connection (Authentication Issue)
+### Example: No Physical Connection (Ethernet Link Down)
 
 ```
 === HEALTH SUMMARY (ASCII) ===
 [1] PowerShell version .................. OK (7.5.3)
-[2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
-[3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
-[4] Ethernet link state ................. OK (Up)
-[5] Credentials source .................. OK (Using saved credentials for: user@isp.com)
-[6] PPPoE authentication ................ FAIL (691 bad credentials)
-[7] PPP interface present ............... FAIL (not created)
-[8] PPP IPv4 assignment ................. FAIL (no non-APIPA IPv4)
-[9] Default route via PPP ............... FAIL (still via 192.168.55.1)
+[2] PPPoE connections configured ........ OK (1 found: Rise PPPoE)
+[3] Physical adapter detected ........... OK (Realtek USB 5GbE Family Controller @ 0 bps)
+[4] Ethernet link state ................. FAIL (Down)
+[5] Credentials source .................. N/A
+[6] PPPoE authentication ................ N/A
+[7] PPP interface present ............... N/A
+[8] PPP IPv4 assignment ................. N/A
+[9] Default route via PPP ............... N/A
 [10] Public IP classification ........... N/A
 [11] Gateway reachability ............... N/A
 [12] Ping (1.1.1.1) via PPP ............ N/A
@@ -193,7 +199,30 @@ The tool generates a comprehensive health summary showing the status of each dia
 OVERALL: FAIL
 ```
 
-**What this means**: The connection failed at step 6 with error 691, which typically means incorrect username/password. You'll need to update your credentials.
+**What this means**: The Ethernet cable is not connected or the network adapter is down. Connect your Ethernet cable and ensure your network adapter is working.
+
+### Example: Failed Connection (Authentication Issue)
+
+```
+=== HEALTH SUMMARY (ASCII) ===
+[1] PowerShell version .................. OK (7.5.3)
+[2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
+[3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
+[4] Ethernet link state ................. OK (Up)
+[5] Credentials source .................. OK (Using Windows saved credentials)
+[6] PPPoE authentication ................ FAIL (691 bad credentials)
+[7] PPP interface present ............... N/A
+[8] PPP IPv4 assignment ................. N/A
+[9] Default route via PPP ............... N/A
+[10] Public IP classification ........... N/A
+[11] Gateway reachability ............... N/A
+[12] Ping (1.1.1.1) via PPP ............ N/A
+[13] Ping (8.8.8.8) via PPP ............ N/A
+[14] MTU probe (DF) ..................... N/A
+OVERALL: FAIL
+```
+
+**What this means**: The connection failed at step 6 with error 691, which typically means incorrect username/password. The script tried Windows saved credentials first but they were incorrect.
 
 ### Example: Successful Connection
 
@@ -203,7 +232,7 @@ OVERALL: FAIL
 [2] PPPoE connections configured ........ OK (1 found: My ISP PPPoE)
 [3] Physical adapter detected ........... OK (Realtek USB 5GbE @ 1 Gbps)
 [4] Ethernet link state ................. OK (Up)
-[5] Credentials source .................. OK (Supplied at runtime)
+[5] Credentials source .................. OK (Using Windows saved credentials)
 [6] PPPoE authentication ................ OK
 [7] PPP interface present ............... OK (IfIndex 23, 'PPPoE')
 [8] PPP IPv4 assignment ................. OK (86.xxx.xxx.xxx/32)
@@ -216,7 +245,7 @@ OVERALL: FAIL
 OVERALL: OK
 ```
 
-**What this means**: Everything is working perfectly! Your PPPoE connection is established and you have full internet connectivity.
+**What this means**: Everything is working perfectly! The script successfully connected using Windows saved credentials and you have full internet connectivity.
 
 ### Status Indicators
 
@@ -234,17 +263,20 @@ OVERALL: OK
 - **APIPA (169.254.x.x)**: Automatic private IP - usually indicates connection failure
 
 ### Credential Management
-- The tool first tries to use saved credentials from your Windows PPPoE connection
-- When using saved credentials, the tool will display the username being used (password is never shown)
-- If saved credentials fail or don't exist, you can provide them manually using the `-UserName` and `-Password` parameters
-- The health summary will show which credential method is being used:
-  - `"OK (Using saved credentials for: user@isp.com)"` - Found and using saved credentials
-  - `"OK (Supplied at runtime)"` - Using credentials provided as parameters
-  - `"WARN (Using saved credentials - username not retrievable)"` - Using saved credentials but couldn't retrieve username
+- The tool uses an intelligent fallback system that tries credentials in this order:
+  1. **Windows saved credentials** (most common)
+  2. **credentials.ps1 file** (if present and has values)
+  3. **Script parameters** (`-UserName` and `-Password`)
+- The health summary will show which credential method succeeded:
+  - `"OK (Using Windows saved credentials)"` - Connected using saved Windows credentials
+  - `"OK (Using credentials from file for: user@isp.com)"` - Connected using credentials.ps1 file
+  - `"OK (Using script parameters for: user@isp.com)"` - Connected using parameters
+  - `"FAIL (All credential methods failed)"` - All attempts failed
 - Common authentication errors:
   - **691**: Bad username or password
   - **692**: Hardware failure in modem or network adapter
-  - **718**: Authentication timeout
+  - **623**: Phone book entry not found (connection doesn't exist)
+  - **678**: No answer (no PADO response from ISP)
 
 ### Output Files
 - Diagnostic transcripts are saved in the `logs/` folder with timestamps
