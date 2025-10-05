@@ -28,7 +28,7 @@ function Test-ONTAvailability {
   
   # Check if any ONT is reachable
   $reachableONTs = $ontResults | Where-Object { $_.Status -eq "REACHABLE" }
-  if ($reachableONTs.Count -gt 0) {
+  if ($reachableONTs -and $reachableONTs -is [array] -and $reachableONTs.Count -gt 0) {
     & $WriteLog "ONT Status: At least one ONT is reachable - local link appears OK"
     return @{ Status = "OK"; ReachableONTs = $reachableONTs; AllResults = $ontResults }
   } else {

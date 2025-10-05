@@ -93,6 +93,15 @@ function Bad-Function {
   return $arr  # ❌ May return null in some contexts
 }
 
+# PROBLEM: Where-Object on empty arrays returns null
+$emptyArray = @()
+$filtered = $emptyArray | Where-Object { $_.Status -eq "OK" }
+# $filtered is $null, not an empty array!
+
+# PROBLEM: Array count access without proper checking
+$array = $null
+$count = $array.Count  # ❌ "Cannot call method on null-valued expression"
+
 # SOLUTION: Force array return behavior
 function Good-Function {
   $arr = @()
@@ -104,6 +113,37 @@ function Good-Function {
     return @()  # Explicit empty array
   } else {
     return $arr
+  }
+}
+
+# SOLUTION: Safe array filtering and counting
+function Safe-ArrayFilter {
+  param($array)
+  
+  # Always ensure we have an array to work with
+  if (-not $array) {
+    $array = @()
+  }
+  
+  $filtered = $array | Where-Object { $_.Status -eq "OK" }
+  
+  # Force array return - Where-Object can return null
+  if (-not $filtered) {
+    return ,@()
+  } else {
+    return ,$filtered
+  }
+}
+
+# SOLUTION: Safe array count access
+function Safe-ArrayCount {
+  param($array)
+  
+  # Safe array count access pattern
+  if ($array -and $array -is [array] -and $array.Count -gt 0) {
+    return $array.Count
+  } else {
+    return 0
   }
 }
 

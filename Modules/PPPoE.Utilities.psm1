@@ -289,25 +289,22 @@ function Get-EnvironmentInfo {
 
 function Get-DisabledWiFiAdapters {
   try {
-    # Use the same filtering logic as Get-WiFiAdapters for consistency
+    # Only return the primary WiFi adapter if it's disabled (same logic as Get-WiFiAdapters)
     $wifiAdapters = Get-NetAdapter -Physical | Where-Object { 
       $_.MediaType -match '802\.11' -and 
+      $_.Status -in @('Up', 'Disconnected', 'Disabled') -and  # Include Disabled for fallback
       $_.InterfaceDescription -notlike "*virtual*" -and
       $_.InterfaceDescription -notlike "*hyper-v*" -and
       $_.InterfaceDescription -notlike "*vmware*" -and
       $_.InterfaceDescription -notlike "*virtualbox*"
     }
     
-    $disabledAdapters = $wifiAdapters | Where-Object { $_.Status -eq 'Disabled' }
-    $adapterNames = $disabledAdapters | Select-Object -ExpandProperty Name
-    
-    # Force array return to handle PowerShell's array behavior
-    if (-not $adapterNames) {
-      return ,@()  # Force empty array return
-    } elseif ($adapterNames -is [string]) {
-      return ,@($adapterNames)  # Force single string to array
+    # If multiple WiFi adapters from same hardware, prefer the disabled one
+    $disabledAdapter = $wifiAdapters | Where-Object { $_.Status -eq 'Disabled' } | Select-Object -First 1
+    if ($disabledAdapter) {
+      return ,@($disabledAdapter.Name)  # Force array return
     } else {
-      return $adapterNames  # Already an array
+      return ,@()  # Force empty array return
     }
   } catch {
     Write-Warning "Failed to get disabled WiFi adapters: $($_.Exception.Message)"
