@@ -53,6 +53,10 @@ function Write-DiagnosticConclusions {
   $authStatus = ($Health.Values | Where-Object { $_ -match 'PPPoE authentication' })
   $pppInterface = ($Health.Values | Where-Object { $_ -match 'PPP interface present' })
   $connectivity = ($Health.Values | Where-Object { $_ -match 'Ping.*via PPP' })
+
+  # Extract specific keyed values we need to reason about
+  $physicalAdapterKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_Physical adapter detected$' } | Select-Object -First 1)
+  $physicalAdapterValue = if ($physicalAdapterKey) { $Health[$physicalAdapterKey] } else { $null }
   
   # Check what's working
   $workingComponents = @()
@@ -60,7 +64,7 @@ function Write-DiagnosticConclusions {
   
   # PC/Software Layer
   if ($Health.Values -match 'PowerShell version.*OK') { $workingComponents += "PC/Software" }
-  if ($Health.Values -match 'Physical adapter detected.*OK') { $workingComponents += "PC Network Adapter" }
+  if ($physicalAdapterValue -and $physicalAdapterValue -match 'OK') { $workingComponents += "PC Network Adapter" }
   if ($Health.Values -match 'Adapter driver.*OK') { $workingComponents += "PC Network Driver" }
   
   # Cable Layer (only check if link is up)
@@ -112,7 +116,18 @@ function Write-DiagnosticConclusions {
   Write-Log ""
   Write-Log "=== TROUBLESHOOTING GUIDANCE ==="
   
-  if ($Health.Values -match 'FAIL.*Down') {
+  if ($physicalAdapterValue -and $physicalAdapterValue -match 'FAIL \(none found\)') {
+    Write-Log "NO ETHERNET ADAPTER DETECTED:"
+    Write-Log "  - If using a built-in (internal) Ethernet port:"
+    Write-Log "    - Check Device Manager for disabled or missing adapter"
+    Write-Log "    - Ensure the adapter is enabled and drivers are installed"
+    Write-Log "  - If using a USB Ethernet adapter (external):"
+    Write-Log "    - Unplug and replug the adapter"
+    Write-Log "    - Try a different USB port (prefer USB 3.0/blue)"
+    Write-Log "    - If available, try a different USB-to-Ethernet dongle"
+    Write-Log "  - After resolving adapter detection, re-run diagnostics"
+  }
+  elseif ($Health.Values -match 'FAIL.*Down') {
     Write-Log "🔌 CABLE ISSUE DETECTED:"
     Write-Log "  - Check Ethernet cable connection to ONT"
     Write-Log "  - Try a different Ethernet cable"

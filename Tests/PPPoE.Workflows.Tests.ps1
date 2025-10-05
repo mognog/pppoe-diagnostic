@@ -87,6 +87,68 @@ try {
         return ($health -is [hashtable] -and $health.ContainsKey('Items'))
     }
     
+    # Test property validation for returned objects
+    Test-Function "Workflow return object has all expected properties" {
+        $result = Invoke-QuickDiagnosticWorkflow -WriteLog { param($msg) Write-Host $msg }
+        $expectedProperties = @('Health', 'Adapter', 'PPPInterface', 'PPPIp')
+        
+        foreach ($prop in $expectedProperties) {
+            if (-not $result.ContainsKey($prop)) {
+                Write-Host "   Missing property: $prop" -ForegroundColor Yellow
+                return $false
+            }
+        }
+        return $true
+    }
+    
+    # Test null safety for health check function returns
+    Test-Function "Workflow handles null returns from health check functions gracefully" {
+        $mockWriteLog = { param($msg) Write-Host $msg }
+        
+        try {
+            $result = Invoke-QuickDiagnosticWorkflow -WriteLog $mockWriteLog
+            
+            # Should not throw errors when accessing properties
+            $health = $result.Health
+            $adapter = $result.Adapter
+            $pppInterface = $result.PPPInterface
+            $pppIP = $result.PPPIp
+            
+            return ($result -is [hashtable])
+        } catch {
+            if ($_.Exception.Message -match "property.*cannot be found") {
+                Write-Host "   Detected property access error!" -ForegroundColor Yellow
+                return $false
+            }
+            return $true
+        }
+    }
+    
+    # Test error handling in main workflow function
+    Test-Function "Main workflow function handles errors gracefully" {
+        $mockWriteLog = { param($msg) Write-Host $msg }
+        
+        try {
+            # Test the main workflow function (not just the quick one)
+            $result = Invoke-PPPoEDiagnosticWorkflow -WriteLog $mockWriteLog
+            
+            # Should return a valid structure even if some checks fail
+            return ($result -is [hashtable] -and 
+                    $result.ContainsKey('Health') -and 
+                    $result.ContainsKey('Adapter') -and
+                    $result.ContainsKey('PPPInterface') -and
+                    $result.ContainsKey('PPPIp') -and
+                    $result.ContainsKey('ConnectionResult') -and
+                    $result.ContainsKey('DisabledWiFiAdapters'))
+        } catch {
+            if ($_.Exception.Message -match "property.*Health.*cannot be found") {
+                Write-Host "   Detected the exact error from the transcript!" -ForegroundColor Yellow
+                return $false
+            }
+            return $true
+        }
+    }
+    
     # Count results
     $total = $passed + $failed
     

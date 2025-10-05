@@ -46,17 +46,36 @@ function Invoke-PPPoEDiagnosticWorkflow {
   & $WriteLog "=== BASIC SYSTEM CHECKS ==="
   & $WriteLog "Checking PowerShell, adapters, and system status..."
   $basicChecks = Invoke-BasicSystemChecks -Health $Health -WriteLog $WriteLog
-  $Health = $basicChecks.Health
-  $pppoeConnections = $basicChecks.PPPoEConnections
+  
+  # Handle null or malformed return from health check function
+  if ($basicChecks -and $basicChecks.ContainsKey('Health')) {
+    $Health = $basicChecks.Health
+    $pppoeConnections = $basicChecks.PPPoEConnections
+  } else {
+    # Fallback if health check function returns null or malformed object
+    & $WriteLog "Warning: Basic system checks returned unexpected result, using fallback values"
+    $Health = Add-Health $Health 'Basic system checks' 'FAIL (unexpected result)' 1
+    $pppoeConnections = @()
+  }
 
   # Phase 2: Network Adapter Checks
   & $WriteLog ""
   & $WriteLog "=== NETWORK ADAPTER CHECKS ==="
   & $WriteLog "Scanning for Ethernet adapters and checking link status..."
   $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
-  $Health = $adapterChecks.Health
-  $nic = $adapterChecks.Adapter
-  $linkDown = $adapterChecks.LinkDown
+  
+  # Handle null or malformed return from health check function
+  if ($adapterChecks -and $adapterChecks.ContainsKey('Health')) {
+    $Health = $adapterChecks.Health
+    $nic = $adapterChecks.Adapter
+    $linkDown = $adapterChecks.LinkDown
+  } else {
+    # Fallback if health check function returns null or malformed object
+    & $WriteLog "Warning: Network adapter checks returned unexpected result, using fallback values"
+    $Health = Add-Health $Health 'Network adapter checks' 'FAIL (unexpected result)' 3
+    $nic = $null
+    $linkDown = $true
+  }
 
   # Phase 3: PPPoE Connection (only if link is up)
   if (-not $linkDown) {
@@ -76,9 +95,19 @@ function Invoke-PPPoEDiagnosticWorkflow {
     & $WriteLog "=== PPPoE CONNECTION ATTEMPTS ==="
     & $WriteLog "Attempting to establish PPPoE connection (this may take 30-90 seconds)..."
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
-    $Health = $connectionChecks.Health
-    $connectionResult = $connectionChecks.ConnectionResult
-    $authOk = $connectionChecks.AuthenticationOk
+    
+    # Handle null or malformed return from health check function
+    if ($connectionChecks -and $connectionChecks.ContainsKey('Health')) {
+      $Health = $connectionChecks.Health
+      $connectionResult = $connectionChecks.ConnectionResult
+      $authOk = $connectionChecks.AuthenticationOk
+    } else {
+      # Fallback if health check function returns null or malformed object
+      & $WriteLog "Warning: PPPoE connection checks returned unexpected result, using fallback values"
+      $Health = Add-Health $Health 'PPPoE connection checks' 'FAIL (unexpected result)' 10
+      $connectionResult = $null
+      $authOk = $false
+    }
 
     # Phase 4: PPP Interface Checks (only if authentication succeeded)
     if ($authOk) {
@@ -86,9 +115,19 @@ function Invoke-PPPoEDiagnosticWorkflow {
       & $WriteLog "=== PPP INTERFACE VERIFICATION ==="
       & $WriteLog "Verifying PPP interface and routing configuration..."
       $pppChecks = Invoke-PPPInterfaceChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -WriteLog $WriteLog
-      $Health = $pppChecks.Health
-      $pppInterface = $pppChecks.PPPInterface
-      $pppIP = $pppChecks.PPPIP
+      
+      # Handle null or malformed return from health check function
+      if ($pppChecks -and $pppChecks.ContainsKey('Health')) {
+        $Health = $pppChecks.Health
+        $pppInterface = $pppChecks.PPPInterface
+        $pppIP = $pppChecks.PPPIP
+      } else {
+        # Fallback if health check function returns null or malformed object
+        & $WriteLog "Warning: PPP interface checks returned unexpected result, using fallback values"
+        $Health = Add-Health $Health 'PPP interface checks' 'FAIL (unexpected result)' 13
+        $pppInterface = $null
+        $pppIP = $null
+      }
 
       # Phase 5: Connectivity Tests (only if we have a PPP interface)
       if ($pppIP) {
@@ -170,14 +209,33 @@ function Invoke-QuickDiagnosticWorkflow {
   
   # Basic system checks
   $basicChecks = Invoke-BasicSystemChecks -Health $Health -WriteLog $WriteLog
-  $Health = $basicChecks.Health
-  $pppoeConnections = $basicChecks.PPPoEConnections
+  
+  # Handle null or malformed return from health check function
+  if ($basicChecks -and $basicChecks.ContainsKey('Health')) {
+    $Health = $basicChecks.Health
+    $pppoeConnections = $basicChecks.PPPoEConnections
+  } else {
+    # Fallback if health check function returns null or malformed object
+    & $WriteLog "Warning: Basic system checks returned unexpected result, using fallback values"
+    $Health = Add-Health $Health 'Basic system checks' 'FAIL (unexpected result)' 1
+    $pppoeConnections = @()
+  }
 
   # Network adapter checks
   $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
-  $Health = $adapterChecks.Health
-  $nic = $adapterChecks.Adapter
-  $linkDown = $adapterChecks.LinkDown
+  
+  # Handle null or malformed return from health check function
+  if ($adapterChecks -and $adapterChecks.ContainsKey('Health')) {
+    $Health = $adapterChecks.Health
+    $nic = $adapterChecks.Adapter
+    $linkDown = $adapterChecks.LinkDown
+  } else {
+    # Fallback if health check function returns null or malformed object
+    & $WriteLog "Warning: Network adapter checks returned unexpected result, using fallback values"
+    $Health = Add-Health $Health 'Network adapter checks' 'FAIL (unexpected result)' 3
+    $nic = $null
+    $linkDown = $true
+  }
 
   # Quick connectivity test if link is up
   if (-not $linkDown) {
@@ -186,14 +244,33 @@ function Invoke-QuickDiagnosticWorkflow {
     $credentialsFile = Join-Path $here "credentials.ps1"
     
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
-    $Health = $connectionChecks.Health
-    $authOk = $connectionChecks.AuthenticationOk
+    
+    # Handle null or malformed return from health check function
+    if ($connectionChecks -and $connectionChecks.ContainsKey('Health')) {
+      $Health = $connectionChecks.Health
+      $authOk = $connectionChecks.AuthenticationOk
+    } else {
+      # Fallback if health check function returns null or malformed object
+      & $WriteLog "Warning: PPPoE connection checks returned unexpected result, using fallback values"
+      $Health = Add-Health $Health 'PPPoE connection checks' 'FAIL (unexpected result)' 10
+      $authOk = $false
+    }
 
     if ($authOk) {
       $pppChecks = Invoke-PPPInterfaceChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -WriteLog $WriteLog
-      $Health = $pppChecks.Health
-      $pppInterface = $pppChecks.PPPInterface
-      $pppIP = $pppChecks.PPPIP
+      
+      # Handle null or malformed return from health check function
+      if ($pppChecks -and $pppChecks.ContainsKey('Health')) {
+        $Health = $pppChecks.Health
+        $pppInterface = $pppChecks.PPPInterface
+        $pppIP = $pppChecks.PPPIP
+      } else {
+        # Fallback if health check function returns null or malformed object
+        & $WriteLog "Warning: PPP interface checks returned unexpected result, using fallback values"
+        $Health = Add-Health $Health 'PPP interface checks' 'FAIL (unexpected result)' 13
+        $pppInterface = $null
+        $pppIP = $null
+      }
 
       if ($pppIP) {
         # Quick connectivity test

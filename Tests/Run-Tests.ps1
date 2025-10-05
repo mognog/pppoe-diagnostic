@@ -40,7 +40,10 @@ if ($TestFiles.Count -eq 0) {
         "PPPoE.Net.Diagnostics.Tests.ps1",
         "PPPoE.HealthChecks.Tests.ps1",
         "PPPoE.ErrorHandling.Tests.ps1",
-        "PPPoE.Security.Tests.ps1"
+        "PPPoE.Security.Tests.ps1",
+        "PPPoE.WorkflowErrorHandling.Tests.ps1",
+        "PPPoE.MockHealthChecks.Tests.ps1",
+        "PPPoE.IntegrationErrorHandling.Tests.ps1"
     )
 }
 
