@@ -224,6 +224,37 @@ Test-Function "Function completes within reasonable time" {
 }
 ```
 
+### Optimizing Expensive Tests (Shared Setup Pattern)
+```powershell
+# SLOW: Running expensive operation for each test (12x slower)
+Test-Function "Test 1" {
+    $result = Invoke-ExpensiveWorkflow  # Takes 20 seconds
+    return $result.Property1 -eq "expected"
+}
+Test-Function "Test 2" {
+    $result = Invoke-ExpensiveWorkflow  # Takes 20 seconds again
+    return $result.Property2 -eq "expected"
+}
+# Total: 40 seconds for 2 tests
+
+# FAST: Run expensive operation once, test multiple assertions (12x faster)
+Write-Host "Running workflow once..."
+$sharedResult = Invoke-ExpensiveWorkflow  # Takes 20 seconds once
+Write-Host "Testing assertions..."
+
+Test-Function "Test 1" {
+    return $sharedResult.Property1 -eq "expected"  # Instant
+}
+Test-Function "Test 2" {
+    return $sharedResult.Property2 -eq "expected"  # Instant
+}
+# Total: 20 seconds for 2 tests
+
+# Use silent loggers for faster execution
+$silentLogger = { param($msg) }  # No output
+$result = Invoke-Workflow -WriteLog $silentLogger
+```
+
 ### Testing Security
 ```powershell
 Test-Function "Function doesn't expose sensitive data" {
@@ -303,6 +334,8 @@ $content = Get-Content Tests\TestFile.ps1 -Raw
 6. **Clean Up Resources** - Always clean up in finally blocks
 7. **Test Security** - Always test credential and input handling
 8. **Document Assumptions** - Comment complex test logic
+9. **Optimize Expensive Operations** - Run workflows/hardware scans once, test multiple assertions against the same result
+10. **Use Silent Loggers in Tests** - Use `{ param($msg) }` instead of verbose logging for faster test execution
 
 ## 📈 Test Coverage Goals
 

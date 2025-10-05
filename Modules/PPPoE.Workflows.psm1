@@ -48,7 +48,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   $basicChecks = Invoke-BasicSystemChecks -Health $Health -WriteLog $WriteLog
   
   # Handle null or malformed return from health check function
-  if ($basicChecks -and $basicChecks.ContainsKey('Health')) {
+  if ($basicChecks -is [hashtable] -and $basicChecks.ContainsKey('Health')) {
     $Health = $basicChecks.Health
     $pppoeConnections = $basicChecks.PPPoEConnections
   } else {
@@ -65,7 +65,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
   
   # Handle null or malformed return from health check function
-  if ($adapterChecks -and $adapterChecks.ContainsKey('Health')) {
+  if ($adapterChecks -is [hashtable] -and $adapterChecks.ContainsKey('Health')) {
     $Health = $adapterChecks.Health
     $nic = $adapterChecks.Adapter
     $linkDown = $adapterChecks.LinkDown
@@ -97,7 +97,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
     
     # Handle null or malformed return from health check function
-    if ($connectionChecks -and $connectionChecks.ContainsKey('Health')) {
+    if ($connectionChecks -is [hashtable] -and $connectionChecks.ContainsKey('Health')) {
       $Health = $connectionChecks.Health
       $connectionResult = $connectionChecks.ConnectionResult
       $authOk = $connectionChecks.AuthenticationOk
@@ -117,7 +117,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
       $pppChecks = Invoke-PPPInterfaceChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -WriteLog $WriteLog
       
       # Handle null or malformed return from health check function
-      if ($pppChecks -and $pppChecks.ContainsKey('Health')) {
+      if ($pppChecks -is [hashtable] -and $pppChecks.ContainsKey('Health')) {
         $Health = $pppChecks.Health
         $pppInterface = $pppChecks.PPPInterface
         $pppIP = $pppChecks.PPPIP
@@ -211,7 +211,7 @@ function Invoke-QuickDiagnosticWorkflow {
   $basicChecks = Invoke-BasicSystemChecks -Health $Health -WriteLog $WriteLog
   
   # Handle null or malformed return from health check function
-  if ($basicChecks -and $basicChecks.ContainsKey('Health')) {
+  if ($basicChecks -is [hashtable] -and $basicChecks.ContainsKey('Health')) {
     $Health = $basicChecks.Health
     $pppoeConnections = $basicChecks.PPPoEConnections
   } else {
@@ -225,7 +225,7 @@ function Invoke-QuickDiagnosticWorkflow {
   $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
   
   # Handle null or malformed return from health check function
-  if ($adapterChecks -and $adapterChecks.ContainsKey('Health')) {
+  if ($adapterChecks -is [hashtable] -and $adapterChecks.ContainsKey('Health')) {
     $Health = $adapterChecks.Health
     $nic = $adapterChecks.Adapter
     $linkDown = $adapterChecks.LinkDown
@@ -246,7 +246,7 @@ function Invoke-QuickDiagnosticWorkflow {
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
     
     # Handle null or malformed return from health check function
-    if ($connectionChecks -and $connectionChecks.ContainsKey('Health')) {
+    if ($connectionChecks -is [hashtable] -and $connectionChecks.ContainsKey('Health')) {
       $Health = $connectionChecks.Health
       $authOk = $connectionChecks.AuthenticationOk
     } else {
@@ -260,7 +260,7 @@ function Invoke-QuickDiagnosticWorkflow {
       $pppChecks = Invoke-PPPInterfaceChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -WriteLog $WriteLog
       
       # Handle null or malformed return from health check function
-      if ($pppChecks -and $pppChecks.ContainsKey('Health')) {
+      if ($pppChecks -is [hashtable] -and $pppChecks.ContainsKey('Health')) {
         $Health = $pppChecks.Health
         $pppInterface = $pppChecks.PPPInterface
         $pppIP = $pppChecks.PPPIP

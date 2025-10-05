@@ -85,6 +85,30 @@ $route = Get-NetRoute ... | Select-Object -First 1
 $nextHop = if ($route) { $route.NextHop } else { $null }
 ```
 
+### Safe Hashtable Method Calls
+```powershell
+# WRONG: Doesn't validate type before calling ContainsKey()
+if ($result -and $result.ContainsKey('Health')) {
+  # ❌ Fails if $result is a string or other non-hashtable type
+}
+
+# CORRECT: Type-check before calling hashtable-specific methods
+if ($result -is [hashtable] -and $result.ContainsKey('Health')) {
+  # ✓ Safe - only calls ContainsKey() on actual hashtables
+  $health = $result.Health
+}
+
+# CORRECT: Alternative using try-catch
+try {
+  if ($result.ContainsKey('Health')) {
+    $health = $result.Health
+  }
+} catch {
+  # Handle case where $result isn't a hashtable
+  $health = $null
+}
+```
+
 ### Array Return Behavior (PowerShell Gotchas)
 ```powershell
 # PROBLEM: PowerShell functions can return null instead of empty arrays
@@ -229,6 +253,13 @@ powershell -Command "Start-Process -FilePath '!PWSH!' -ArgumentList '-NoProfile'
 - **Cause**: Function returned null instead of expected array
 - **Fix**: Use comma operator to force array return: `return ,@()` or `return ,$array`
 - **Prevention**: Always test function returns: `$result = Your-Function; if ($result -is [array]) { ... }`
+
+### "Method invocation failed because [System.String] does not contain a method named 'ContainsKey'"
+- **Cause**: Calling `.ContainsKey()` on a variable without verifying it's a hashtable first
+- **Wrong**: `if ($result -and $result.ContainsKey('Key'))` - fails if $result is a string
+- **Fix**: `if ($result -is [hashtable] -and $result.ContainsKey('Key'))` - type-check first
+- **Prevention**: Always validate type before calling type-specific methods
+- **Common locations**: Workflow functions that receive hashtable returns from health check functions
 
 ### Array type changes unexpectedly (array becomes string)
 - **Cause**: PowerShell converts single-item arrays to strings in some contexts
