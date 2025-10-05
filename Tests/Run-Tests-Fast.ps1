@@ -17,15 +17,16 @@ $testResults = @{
     TestFiles = @()
 }
 
-# Fast tests only (no hardware scanning, no network operations)
+# Fast tests only (optimized versions with shared setup)
 $fastTests = @(
-    "PPPoE.Core.Tests.ps1",              # 3.7s - Fast
-    "PPPoE.Health.Tests.ps1",            # 0.4s - Fast
-    "PPPoE.Configuration.Tests.ps1",     # Fast
-    "PPPoE.Utilities.Tests.ps1",         # Fast
-    "PPPoE.Security.Tests.ps1",          # Fast
-    "PPPoE.ErrorHandling.Tests.ps1",     # Fast
-    "PPPoE.WorkflowErrorHandling.Tests.ps1"  # 24s - Optimized
+    "PPPoE.Core.Tests.ps1",              # ~4s - Fast
+    "PPPoE.Health.Tests.ps1",            # ~0.4s - Fast
+    "PPPoE.Configuration.Tests.ps1",     # ~0.5s - Fast
+    "PPPoE.Utilities.Tests.ps1",         # ~9s - Fast
+    "PPPoE.ErrorHandling.Tests.ps1",     # ~2s - Fast
+    "PPPoE.Workflows.Tests.Fast.ps1",    # ~45s - OPTIMIZED (vs 170s)
+    "PPPoE.HealthChecks.Tests.Fast.ps1", # ~25s - OPTIMIZED (vs 206s)
+    "PPPoE.WorkflowErrorHandling.Tests.ps1"  # ~20s - OPTIMIZED (vs 283s)
 )
 
 Write-Host "Running FAST tests (skipping slow integration tests)" -ForegroundColor Yellow
