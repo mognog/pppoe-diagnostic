@@ -3,6 +3,7 @@
 Set-StrictMode -Version 3.0
 
 function Get-CandidateEthernetAdapters {
+  # Note: Network adapter enumeration may take a few seconds
   $eth = Get-NetAdapter -Physical | Where-Object { $_.MediaType -match '802\.3' -or $_.Name -match 'Ethernet' }
   $eth | Sort-Object -Property Status -Descending
 }
@@ -132,6 +133,7 @@ function Disable-WiFiAdapters {
     
     if ($wifiAdapter.Status -eq 'Up') {
       & $WriteLog "Disabling WiFi adapter: $($wifiAdapter.Name)"
+      & $WriteLog "  This may take a few seconds..."
       try {
         Disable-NetAdapter -Name $wifiAdapter.Name -Confirm:$false -ErrorAction Stop
         & $WriteLog "WiFi adapter disabled: $($wifiAdapter.Name)"
@@ -166,6 +168,7 @@ function Enable-WiFiAdapters {
     # Enable specific adapters
     foreach ($adapterName in $AdapterNames) {
       & $WriteLog "Re-enabling WiFi adapter: $adapterName"
+      & $WriteLog "  This may take a few seconds..."
       try {
         Enable-NetAdapter -Name $adapterName -Confirm:$false -ErrorAction Stop
         & $WriteLog "WiFi adapter re-enabled: $adapterName"

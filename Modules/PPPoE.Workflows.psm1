@@ -44,6 +44,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   # Phase 1: Basic System Checks
   & $WriteLog ""
   & $WriteLog "=== BASIC SYSTEM CHECKS ==="
+  & $WriteLog "Checking PowerShell, adapters, and system status..."
   $basicChecks = Invoke-BasicSystemChecks -Health $Health -WriteLog $WriteLog
   $Health = $basicChecks.Health
   $pppoeConnections = $basicChecks.PPPoEConnections
@@ -51,6 +52,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   # Phase 2: Network Adapter Checks
   & $WriteLog ""
   & $WriteLog "=== NETWORK ADAPTER CHECKS ==="
+  & $WriteLog "Scanning for Ethernet adapters and checking link status..."
   $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
   $Health = $adapterChecks.Health
   $nic = $adapterChecks.Adapter
@@ -72,6 +74,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
     
     & $WriteLog ""
     & $WriteLog "=== PPPoE CONNECTION ATTEMPTS ==="
+    & $WriteLog "Attempting to establish PPPoE connection (this may take 30-90 seconds)..."
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
     $Health = $connectionChecks.Health
     $connectionResult = $connectionChecks.ConnectionResult
@@ -81,6 +84,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
     if ($authOk) {
       & $WriteLog ""
       & $WriteLog "=== PPP INTERFACE VERIFICATION ==="
+      & $WriteLog "Verifying PPP interface and routing configuration..."
       $pppChecks = Invoke-PPPInterfaceChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -WriteLog $WriteLog
       $Health = $pppChecks.Health
       $pppInterface = $pppChecks.PPPInterface
@@ -90,6 +94,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
       if ($pppIP) {
         & $WriteLog ""
         & $WriteLog "=== CONNECTIVITY TESTS ==="
+        & $WriteLog "Testing basic connectivity and DNS resolution..."
         $Health = Invoke-ConnectivityChecks -Health $Health -PPPInterface $pppInterface -PPPIP $pppIP -WriteLog $WriteLog
 
         # Phase 6: Advanced Connectivity Tests

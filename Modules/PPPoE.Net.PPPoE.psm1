@@ -76,6 +76,7 @@ function Connect-PPPWithFallback {
   
   # Attempt 1: Try Windows saved credentials first (most common scenario)
   & $WriteLog "Attempt 1: Trying Windows saved credentials for connection '$PppoeName'"
+  & $WriteLog "  This may take 10-30 seconds..."
   $result = Connect-PPP -PppoeName $PppoeName -UseSaved
   if ($result.Success) {
     & $WriteLog "SUCCESS: Connected using Windows saved credentials"
@@ -124,6 +125,7 @@ function Connect-PPPWithFallback {
                                }
         
         & $WriteLog "Attempt 2: Trying credentials from file for user '$fileUserName' on connection '$fileConnectionName'"
+        & $WriteLog "  This may take 10-30 seconds..."
         $result = Connect-PPP -PppoeName $fileConnectionName -UserName $fileUserName -Password $filePassword
         if ($result.Success) {
           & $WriteLog "SUCCESS: Connected using credentials from file"
@@ -156,6 +158,7 @@ function Connect-PPPWithFallback {
   # Attempt 3: Try parameters passed to script
   if ($UserName -and $Password -and $UserName.Trim() -ne '' -and $Password.Trim() -ne '') {
     & $WriteLog "Attempt 3: Trying credentials from script parameters for user '$UserName'"
+    & $WriteLog "  This may take 10-30 seconds..."
     $result = Connect-PPP -PppoeName $PppoeName -UserName $UserName -Password $Password
     if ($result.Success) {
       & $WriteLog "SUCCESS: Connected using script parameters"

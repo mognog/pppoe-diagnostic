@@ -13,7 +13,7 @@ function Test-ONTAvailability {
   
   foreach ($ip in $ontIPs) {
     try {
-      & $WriteLog "Testing ONT at $ip..."
+      & $WriteLog "Testing ONT at $ip... (testing 4 common ONT addresses)"
       $ping = Test-Connection -TargetName $ip -Count 2 -TimeoutSeconds 3 -ErrorAction Stop
       if ($ping) {
         $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
