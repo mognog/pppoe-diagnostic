@@ -289,20 +289,29 @@ function Get-EnvironmentInfo {
 
 function Get-DisabledWiFiAdapters {
   try {
-    $wifiAdapters = Get-NetAdapter | Where-Object { 
-      $_.InterfaceDescription -like "*wireless*" -or 
-      $_.InterfaceDescription -like "*wi-fi*" -or 
-      $_.InterfaceDescription -like "*wlan*" -or
-      $_.Name -like "*Wi-Fi*" -or
-      $_.Name -like "*Wireless*" -or
-      $_.Name -like "*WLAN*"
+    # Use the same filtering logic as Get-WiFiAdapters for consistency
+    $wifiAdapters = Get-NetAdapter -Physical | Where-Object { 
+      $_.MediaType -match '802\.11' -and 
+      $_.InterfaceDescription -notlike "*virtual*" -and
+      $_.InterfaceDescription -notlike "*hyper-v*" -and
+      $_.InterfaceDescription -notlike "*vmware*" -and
+      $_.InterfaceDescription -notlike "*virtualbox*"
     }
     
     $disabledAdapters = $wifiAdapters | Where-Object { $_.Status -eq 'Disabled' }
-    return $disabledAdapters | Select-Object -ExpandProperty Name
+    $adapterNames = $disabledAdapters | Select-Object -ExpandProperty Name
+    
+    # Force array return to handle PowerShell's array behavior
+    if (-not $adapterNames) {
+      return ,@()  # Force empty array return
+    } elseif ($adapterNames -is [string]) {
+      return ,@($adapterNames)  # Force single string to array
+    } else {
+      return $adapterNames  # Already an array
+    }
   } catch {
     Write-Warning "Failed to get disabled WiFi adapters: $($_.Exception.Message)"
-    return @()
+    return ,@()  # Force empty array return on error
   }
 }
 

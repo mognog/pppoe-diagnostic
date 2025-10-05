@@ -85,6 +85,46 @@ $route = Get-NetRoute ... | Select-Object -First 1
 $nextHop = if ($route) { $route.NextHop } else { $null }
 ```
 
+### Array Return Behavior (PowerShell Gotchas)
+```powershell
+# PROBLEM: PowerShell functions can return null instead of empty arrays
+function Bad-Function {
+  $arr = @()
+  return $arr  # ❌ May return null in some contexts
+}
+
+# SOLUTION: Force array return behavior
+function Good-Function {
+  $arr = @()
+  # Method 1: Use comma operator to force array
+  return ,$arr
+  
+  # Method 2: Explicitly check and handle
+  if ($arr.Count -eq 0) {
+    return @()  # Explicit empty array
+  } else {
+    return $arr
+  }
+}
+
+# SOLUTION: Handle single-item arrays correctly
+function Handle-SingleItem {
+  $items = @("single-item")
+  # Single-item arrays can be returned as strings!
+  if ($items -is [string]) {
+    return ,@($items)  # Force to array
+  } else {
+    return $items
+  }
+}
+
+# VERIFICATION: Always test array returns
+$result = Your-Function
+Write-Host "Is array: $($result -is [array])"
+Write-Host "Is null: $($result -eq $null)"
+Write-Host "Count: $($result.Count)"
+```
+
 ## ❌ DEFINITELY DOESN'T WORK
 
 ### PowerShell Script Issues
@@ -144,6 +184,16 @@ powershell -Command "Start-Process -FilePath '!PWSH!' -ArgumentList '-NoProfile'
 - **Cause**: Array indexing without checking if array exists and has elements
 - **Fix**: Always check array existence and count before indexing: `if ($array -and $array.Count -gt 0) { $array[0] }`
 - **Common locations**: `Get-RecommendedAdapter`, `Get-PppInterface` functions
+
+### "You cannot call a method on a null-valued expression"
+- **Cause**: Function returned null instead of expected array
+- **Fix**: Use comma operator to force array return: `return ,@()` or `return ,$array`
+- **Prevention**: Always test function returns: `$result = Your-Function; if ($result -is [array]) { ... }`
+
+### Array type changes unexpectedly (array becomes string)
+- **Cause**: PowerShell converts single-item arrays to strings in some contexts
+- **Fix**: Use comma operator or explicit array creation: `return ,@($singleItem)`
+- **Detection**: `$result -is [string]` when expecting array
 
 ### "The term 'param' is not recognized"
 - **Cause**: param() block not at the beginning of script
@@ -289,6 +339,16 @@ OVERALL: FAIL
 5. **Keep scripts in dedicated directory with proper structure**
 6. **Use version control for script changes**
 7. **Test on clean Windows installations when possible**
+8. **Test array-returning functions thoroughly**
+   ```powershell
+   # Always verify array functions return proper arrays
+   $result = Your-Function
+   if ($result -is [array]) {
+     Write-Host "✓ Function returned array with $($result.Count) items"
+   } else {
+     Write-Host "✗ Function returned $($result.GetType().Name), expected array"
+   }
+   ```
 
 ---
 

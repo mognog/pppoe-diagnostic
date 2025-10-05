@@ -93,36 +93,62 @@ function Test-LinkUp {
 }
 
 function Get-WiFiAdapters {
-  Get-NetAdapter -Physical | Where-Object { $_.MediaType -match '802\.11' }
+  # Only return the primary active WiFi adapter (not all WiFi interfaces from multi-band adapters)
+  $wifiAdapters = Get-NetAdapter -Physical | Where-Object { 
+    $_.MediaType -match '802\.11' -and 
+    $_.Status -in @('Up', 'Disconnected') -and  # Only active adapters, not disabled/hidden
+    $_.InterfaceDescription -notlike "*virtual*" -and
+    $_.InterfaceDescription -notlike "*hyper-v*" -and
+    $_.InterfaceDescription -notlike "*vmware*" -and
+    $_.InterfaceDescription -notlike "*virtualbox*"
+  }
+  
+  # If multiple WiFi adapters from same hardware (like multi-band), prefer the "Up" one
+  $upAdapter = $wifiAdapters | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
+  if ($upAdapter) {
+    return $upAdapter
+  } else {
+    # Fallback to first disconnected adapter if no "Up" adapter found
+    return $wifiAdapters | Select-Object -First 1
+  }
 }
 
 function Disable-WiFiAdapters {
   param([scriptblock]$WriteLog)
   
-  $wifiAdapters = Get-WiFiAdapters
-  $disabledAdapters = @()
-  
-  if (-not $wifiAdapters) {
-    & $WriteLog "No WiFi adapters found to disable"
-    return $disabledAdapters
-  }
-  
-  foreach ($adapter in $wifiAdapters) {
-    if ($adapter.Status -eq 'Up') {
-      & $WriteLog "Disabling WiFi adapter: $($adapter.Name)"
+  try {
+    # Handle null WriteLog
+    if (-not $WriteLog) {
+      $WriteLog = { param($msg) Write-Host $msg }
+    }
+    
+    $wifiAdapter = Get-WiFiAdapters
+    $disabledAdapters = @()
+    
+    if (-not $wifiAdapter) {
+      & $WriteLog "No WiFi adapters found to disable"
+      return ,@()  # Force empty array return
+    }
+    
+    if ($wifiAdapter.Status -eq 'Up') {
+      & $WriteLog "Disabling WiFi adapter: $($wifiAdapter.Name)"
       try {
-        Disable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
-        & $WriteLog "WiFi adapter disabled: $($adapter.Name)"
-        $disabledAdapters += $adapter.Name
+        Disable-NetAdapter -Name $wifiAdapter.Name -Confirm:$false -ErrorAction Stop
+        & $WriteLog "WiFi adapter disabled: $($wifiAdapter.Name)"
+        $disabledAdapters += $wifiAdapter.Name
       } catch {
-        & $WriteLog "Failed to disable WiFi adapter $($adapter.Name): $($_.Exception.Message)"
+        & $WriteLog "Failed to disable WiFi adapter $($wifiAdapter.Name): $($_.Exception.Message)"
       }
     } else {
-      & $WriteLog "WiFi adapter already disabled: $($adapter.Name)"
+      & $WriteLog "WiFi adapter already disabled: $($wifiAdapter.Name)"
     }
+    
+    # Force array return to handle PowerShell's array behavior
+    return ,$disabledAdapters
+  } catch {
+    & $WriteLog "Error in Disable-WiFiAdapters: $($_.Exception.Message)"
+    return ,@()  # Force empty array return on error
   }
-  
-  return $disabledAdapters
 }
 
 function Enable-WiFiAdapters {
@@ -130,6 +156,11 @@ function Enable-WiFiAdapters {
     [scriptblock]$WriteLog,
     [string[]]$AdapterNames = @()
   )
+  
+  # Handle null WriteLog
+  if (-not $WriteLog) {
+    $WriteLog = { param($msg) Write-Host $msg }
+  }
   
   if ($AdapterNames -and $AdapterNames.Count -gt 0) {
     # Enable specific adapters

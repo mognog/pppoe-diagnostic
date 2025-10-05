@@ -27,7 +27,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   if (-not $SkipWifiToggle) {
     & $WriteLog "Checking WiFi adapter status..."
     $disabledWiFiAdapters = Disable-WiFiAdapters -WriteLog $WriteLog
-    if ($disabledWiFiAdapters -and $disabledWiFiAdapters.Count -gt 0) {
+    if ($disabledWiFiAdapters -and $disabledWiFiAdapters -is [array] -and $disabledWiFiAdapters.Count -gt 0) {
       & $WriteLog "Temporarily disabled $($disabledWiFiAdapters.Count) WiFi adapter(s) to prevent interference"
     } else {
       & $WriteLog "No WiFi adapters were active or found"
