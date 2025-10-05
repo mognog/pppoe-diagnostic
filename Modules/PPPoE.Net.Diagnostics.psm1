@@ -15,10 +15,13 @@ function Test-ONTAvailability {
     try {
       & $WriteLog "Testing ONT at $ip... (testing 4 common ONT addresses)"
       $ping = Test-Connection -TargetName $ip -Count 2 -TimeoutSeconds 3 -ErrorAction Stop
-      if ($ping) {
-        $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
+      if ($ping -and $ping.Count -gt 0) {
+        $avgLatency = [Math]::Round(($ping | Measure-Object -Property Latency -Average).Average, 1)
         & $WriteLog "  ONT at $ip`: REACHABLE (${avgLatency}ms avg)"
         $ontResults += @{ IP = $ip; Status = "REACHABLE"; Latency = $avgLatency }
+      } else {
+        & $WriteLog "  ONT at $ip`: UNREACHABLE"
+        $ontResults += @{ IP = $ip; Status = "UNREACHABLE"; Latency = $null }
       }
     } catch {
       & $WriteLog "  ONT at $ip`: UNREACHABLE"
@@ -40,19 +43,26 @@ function Test-ONTAvailability {
 function Show-ONTLEDReminder {
   param([scriptblock]$WriteLog)
   
+  # Handle null WriteLog
+  if (-not $WriteLog) {
+    $WriteLog = { param($msg) Write-Host $msg }
+  }
+  
   & $WriteLog ""
   & $WriteLog "=== ONT LED STATUS CHECK ==="
   & $WriteLog "Please visually check your ONT (Optical Network Terminal) LEDs:"
   & $WriteLog ""
-  & $WriteLog "Expected LED States:"
-  & $WriteLog "  PON (Power/Online): SOLID GREEN"
-  & $WriteLog "  LOS (Loss of Signal): OFF"
-  & $WriteLog "  LAN: SOLID GREEN (when connected)"
+  & $WriteLog "Expected LED States (ONT models vary, check what you have):"
+  & $WriteLog "  PON/Online: SOLID GREEN (most important - shows fiber sync)"
+  & $WriteLog "  LAN: SOLID GREEN (when connected to router/computer)"
+  & $WriteLog "  Power: SOLID GREEN (if present)"
+  & $WriteLog "  LOS/Alarm: OFF (if present - shows no signal loss)"
   & $WriteLog ""
-  & $WriteLog "If you see:"
-  & $WriteLog "  - Blinking red LOS: Fibre cable issue or Openreach fault"
-  & $WriteLog "  - PON not solid green: ONT not syncing with network"
+  & $WriteLog "If you see problems:"
+  & $WriteLog "  - PON/Online not solid green: ONT not syncing with fiber network"
+  & $WriteLog "  - Blinking red LOS/Alarm: Fiber cable issue or Openreach fault"
   & $WriteLog "  - All LEDs off: Power issue"
+  & $WriteLog "  - LAN not green: Check Ethernet cable connection"
   & $WriteLog ""
   & $WriteLog "Press Enter to continue after checking LEDs..."
   Read-Host
