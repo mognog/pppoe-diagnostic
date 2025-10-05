@@ -19,10 +19,15 @@ function Get-CredentialsFromFile {
     $content = Get-Content $CredentialsFilePath -Raw
     
     # Extract username and password variables using regex
-    if ($content -match '\$username\s*=\s*["'']([^"'']+)["'']') {
+    # Support both $username/$password and $PPPoE_Username/$PPPoE_Password formats
+    if ($content -match '\$PPPoE_Username\s*=\s*["'']([^"'']+)["'']') {
+      $credentialVars.Username = $matches[1]
+    } elseif ($content -match '\$username\s*=\s*["'']([^"'']+)["'']') {
       $credentialVars.Username = $matches[1]
     }
-    if ($content -match '\$password\s*=\s*["'']([^"'']+)["'']') {
+    if ($content -match '\$PPPoE_Password\s*=\s*["'']([^"'']+)["'']') {
+      $credentialVars.Password = $matches[1]
+    } elseif ($content -match '\$password\s*=\s*["'']([^"'']+)["'']') {
       $credentialVars.Password = $matches[1]
     }
     
