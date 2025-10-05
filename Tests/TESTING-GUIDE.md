@@ -30,6 +30,312 @@ This directory contains comprehensive tests for the PPPoE Diagnostic Toolkit. Th
 - `PPPoE.Security.Tests.ps1` - Security & credential validation
 - `PPPoE.MainScript.Tests.ps1` - Main script validation
 
+## ⚡ Writing Optimized Tests (Start Here!)
+
+Before writing any tests, understand these key principles to avoid creating slow tests:
+
+### 🎯 Golden Rules for Fast Tests
+
+1. **Expensive operations run ONCE, assertions run MANY times**
+2. **Use silent loggers**: `{ param($msg) }` instead of `{ param($msg) Write-Host $msg }`
+3. **Test parameter existence vs. execution** when possible
+4. **Group related tests** to share setup
+5. **Use static analysis** for code quality checks
+
+### 📐 Test Design Pattern: Shared Setup
+
+**❌ ANTI-PATTERN: Repeated Expensive Operations**
+```powershell
+# BAD: Each test runs full hardware scan (20s × 10 = 200s total)
+Test-Function "Test 1" {
+    $result = Invoke-QuickDiagnosticWorkflow -WriteLog { param($msg) Write-Host $msg }
+    return $result.Health -is [hashtable]
+}
+
+Test-Function "Test 2" {
+    $result = Invoke-QuickDiagnosticWorkflow -WriteLog { param($msg) Write-Host $msg }
+    return $result.Adapter -ne $null
+}
+# ... 8 more tests, each taking 20s
+# TOTAL TIME: 200 seconds
+```
+
+**✅ BEST PRACTICE: Shared Setup Pattern**
+```powershell
+# GOOD: Run expensive operation once, test many assertions
+Write-Host "[1/2] Running workflow once (silent mode)..."
+$silentLogger = { param($msg) }  # No output = faster
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$sharedResult = Invoke-QuickDiagnosticWorkflow -WriteLog $silentLogger
+$stopwatch.Stop()
+Write-Host "  Completed in $($stopwatch.ElapsedMilliseconds)ms"
+
+Write-Host "[2/2] Testing assertions (10 tests)..."
+Test-Function "Test 1" { $sharedResult.Health -is [hashtable] }      # Instant
+Test-Function "Test 2" { $sharedResult.Adapter -ne $null }           # Instant
+Test-Function "Test 3" { $sharedResult.PPPInterface -eq $null }      # Instant
+# ... 7 more instant tests
+# TOTAL TIME: 20 seconds (10x faster!)
+```
+
+### 🔍 Identifying Expensive Operations
+
+Operations that should run **once** and be shared:
+- ✋ Hardware scans: `Get-NetAdapter`, `Get-CandidateEthernetAdapters`
+- ✋ Network calls: `Test-PingHost`, `Test-Connection`, PPPoE connections
+- ✋ Full workflows: `Invoke-QuickDiagnosticWorkflow`, `Invoke-PPPoEDiagnosticWorkflow`
+- ✋ System queries: `Get-NetRoute`, `Get-Process`, registry access
+- ✋ File I/O: Large file reads, directory scans
+
+Operations that are **fast** and can run per test:
+- ✅ Type checks: `$result -is [hashtable]`
+- ✅ Property access: `$result.Property`
+- ✅ String operations: `-match`, `-replace`, `.Contains()`
+- ✅ Simple arithmetic: comparisons, calculations
+- ✅ Parameter existence: `(Get-Command).Parameters.ContainsKey()`
+
+### 📋 Template for Optimized Tests
+
+```powershell
+# OptimizedTest.Tests.ps1
+
+$originalPolicy = Get-ExecutionPolicy -Scope Process
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+
+try {
+    # Import modules
+    Import-Module "./Modules/YourModule.psm1" -Force
+    
+    Write-Host "Running optimized tests..." -ForegroundColor Cyan
+    
+    function Test-Assertion {
+        param([string]$Name, [scriptblock]$TestScript)
+        try {
+            $result = & $TestScript
+            if ($result) {
+                Write-Host "  PASS: $Name" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "  FAIL: $Name" -ForegroundColor Red
+                return $false
+            }
+        } catch {
+            Write-Host "  FAIL: $Name - $($_.Exception.Message)" -ForegroundColor Red
+            return $false
+        }
+    }
+    
+    $passed = 0
+    $failed = 0
+    $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    
+    # ================================================
+    # PHASE 1: Run expensive operations ONCE
+    # ================================================
+    Write-Host "[1/3] Running expensive setup once..." -ForegroundColor Cyan
+    $silentLogger = { param($msg) }  # Silent for speed
+    
+    try {
+        $sharedResult = Invoke-ExpensiveOperation -WriteLog $silentLogger
+        $setupSuccess = $true
+    } catch {
+        $sharedResult = $null
+        $setupSuccess = $false
+        $setupError = $_.Exception.Message
+    }
+    
+    Write-Host ""
+    
+    # ================================================
+    # PHASE 2: Test structure (fast assertions)
+    # ================================================
+    Write-Host "[2/3] Testing structure (5 assertions)..." -ForegroundColor Cyan
+    
+    if (Test-Assertion "Setup succeeded" { $setupSuccess }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "Returns hashtable" { $sharedResult -is [hashtable] }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "Has required keys" { $sharedResult.ContainsKey('Key1') }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "Property is valid" { $sharedResult.Property -ne $null }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "No errors occurred" { -not $setupError }) { $passed++ } else { $failed++ }
+    
+    Write-Host ""
+    
+    # ================================================
+    # PHASE 3: Static analysis (no execution needed)
+    # ================================================
+    Write-Host "[3/3] Static analysis (3 assertions)..." -ForegroundColor Cyan
+    
+    if (Test-Assertion "Function exported" { Get-Command Invoke-ExpensiveOperation -EA SilentlyContinue }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "Has required parameter" { 
+        (Get-Command Invoke-ExpensiveOperation).Parameters.ContainsKey('WriteLog')
+    }) { $passed++ } else { $failed++ }
+    if (Test-Assertion "Code uses best practices" {
+        $content = Get-Content "./Modules/YourModule.psm1" -Raw
+        $content -match '-is \[hashtable\] -and'  # Verify type checking
+    }) { $passed++ } else { $failed++ }
+    
+    $totalStopwatch.Stop()
+    
+    # ================================================
+    # Summary
+    # ================================================
+    Write-Host ""
+    Write-Host "Test Results:" -ForegroundColor Cyan
+    Write-Host "  Passed: $passed" -ForegroundColor Green
+    Write-Host "  Failed: $failed" -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Gray' })
+    Write-Host "  Time: $([math]::Round($totalStopwatch.Elapsed.TotalSeconds, 1))s" -ForegroundColor White
+    
+    if ($failed -eq 0) {
+        Write-Host ""
+        Write-Host "All tests passed!" -ForegroundColor Green
+        exit 0
+    } else {
+        Write-Host ""
+        Write-Host "Some tests failed!" -ForegroundColor Red
+        exit 1
+    }
+    
+} finally {
+    Set-ExecutionPolicy -ExecutionPolicy $originalPolicy -Scope Process -Force
+}
+```
+
+### 🎨 Optimization Techniques
+
+#### 1. Silent Loggers for Speed
+```powershell
+# SLOW: Verbose logging (writes to console every time)
+$verboseLogger = { param($msg) Write-Host $msg }
+$result = Invoke-Workflow -WriteLog $verboseLogger
+
+# FAST: Silent logging (no console overhead)
+$silentLogger = { param($msg) }
+$result = Invoke-Workflow -WriteLog $silentLogger
+```
+
+#### 2. Test Parameter Existence Instead of Execution
+```powershell
+# SLOW: Run workflow to test parameter (20 seconds)
+Test-Function "Accepts SkipWifiToggle parameter" {
+    $result = Invoke-QuickDiagnosticWorkflow -SkipWifiToggle -WriteLog { param($msg) }
+    return $result -ne $null
+}
+
+# FAST: Check parameter exists (instant)
+Test-Function "Has SkipWifiToggle parameter" {
+    return (Get-Command Invoke-QuickDiagnosticWorkflow).Parameters.ContainsKey('SkipWifiToggle')
+}
+```
+
+#### 3. Static Analysis for Code Quality
+```powershell
+# FAST: Verify code patterns without execution (instant)
+Test-Function "Uses safe hashtable access" {
+    $content = Get-Content "Modules/MyModule.psm1" -Raw
+    $unsafeCalls = $content | Select-String -Pattern '\$\w+ -and \$\w+\.ContainsKey' -AllMatches
+    $safeCalls = $content | Select-String -Pattern '-is \[hashtable\] -and \$\w+\.ContainsKey' -AllMatches
+    
+    # All ContainsKey calls should be protected with type check
+    return $unsafeCalls.Matches.Count -eq $safeCalls.Matches.Count
+}
+```
+
+#### 4. Batch Related Tests
+```powershell
+# GOOD: Group tests by shared setup requirements
+Write-Host "=== Testing Network Functions (shared network state) ==="
+$adapters = Get-NetAdapter  # Get once
+Test-Function "Has adapters" { $adapters.Count -gt 0 }
+Test-Function "First adapter valid" { $adapters[0].Status -ne $null }
+Test-Function "Has Ethernet" { $adapters | Where-Object { $_.Name -match 'Ethernet' } }
+```
+
+### 📊 Performance Benchmarking
+
+Always measure test performance during development:
+
+```powershell
+# Add timing to your test template
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+# ... run tests ...
+
+$stopwatch.Stop()
+Write-Host "Total time: $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s" -ForegroundColor $(
+    if ($stopwatch.Elapsed.TotalSeconds -lt 30) { 'Green' }
+    elseif ($stopwatch.Elapsed.TotalSeconds -lt 60) { 'Yellow' }
+    else { 'Red' }
+)
+
+# Guidelines:
+# - Unit tests: < 5 seconds (Green)
+# - Integration tests: < 30 seconds (Yellow)
+# - Full workflow tests: < 60 seconds (acceptable)
+# - Anything > 60s: Needs optimization (Red)
+```
+
+### ⚠️ Common Pitfalls to Avoid
+
+#### 1. Don't Call Workflows in Loops
+```powershell
+# ❌ BAD: 100 seconds for 5 tests
+$testCases = @('Case1', 'Case2', 'Case3', 'Case4', 'Case5')
+foreach ($case in $testCases) {
+    Test-Function "Test $case" {
+        $result = Invoke-QuickDiagnosticWorkflow  # 20s each time!
+        return $result.SomeProperty -eq $case
+    }
+}
+
+# ✅ GOOD: 20 seconds for 5 tests
+$sharedResult = Invoke-QuickDiagnosticWorkflow  # Once
+foreach ($case in $testCases) {
+    Test-Function "Test $case" {
+        return $sharedResult.SomeProperty -eq $case  # Instant
+    }
+}
+```
+
+#### 2. Don't Use Verbose Logging in Tests
+```powershell
+# ❌ BAD: Slows down execution significantly
+$result = Invoke-Workflow -WriteLog { param($msg) Write-Host $msg -Verbose }
+
+# ✅ GOOD: Use silent logger unless debugging
+$result = Invoke-Workflow -WriteLog { param($msg) }
+```
+
+#### 3. Don't Test Implementation Details
+```powershell
+# ❌ BAD: Tests internal implementation (brittle and slow)
+Test-Function "Uses specific adapter selection logic" {
+    # Reading source code, checking internal function calls, etc.
+}
+
+# ✅ GOOD: Test public interface and behavior
+Test-Function "Returns valid adapter" {
+    $adapter = Get-RecommendedAdapter
+    return $adapter -ne $null -and $adapter.Status -eq 'Up'
+}
+```
+
+### 🎯 Test Speed Goals
+
+| Test Type | Target Time | Example |
+|-----------|-------------|---------|
+| **Unit Test** | < 5s | Test single function with mocks |
+| **Integration Test** | < 30s | Test module interaction, shared setup |
+| **Workflow Test** | < 60s | Test full diagnostic, run once |
+| **Full Suite** | < 120s | All optimized tests |
+
+### 📈 Real-World Examples
+
+See these optimized test files for reference:
+- `Tests/PPPoE.WorkflowErrorHandling.Tests.ps1` - 13.5x faster (283s → 21s)
+- `Tests/PPPoE.Workflows.Tests.Fast.ps1` - 4x faster (170s → 41s)
+- `Tests/PPPoE.HealthChecks.Tests.Fast.ps1` - 10x faster (206s → 21s)
+
+---
+
 ## 🚀 Running Tests
 
 ### Run All Tests
@@ -42,6 +348,17 @@ This directory contains comprehensive tests for the PPPoE Diagnostic Toolkit. Th
 
 # Install Pester framework (if needed)
 .\Tests\Run-Tests.ps1 -InstallPester
+```
+
+### Run Fast Tests Only (Recommended for Development)
+```powershell
+# Fast test suite (~99 seconds vs ~692 seconds)
+.\Tests\Run-Tests-Fast.ps1
+
+# Individual optimized tests
+.\Tests\PPPoE.Workflows.Tests.Fast.ps1        # 41s
+.\Tests\PPPoE.HealthChecks.Tests.Fast.ps1     # 21s
+.\Tests\PPPoE.WorkflowErrorHandling.Tests.ps1 # 21s
 ```
 
 ### Run Specific Test Files
