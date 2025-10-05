@@ -44,8 +44,7 @@ function Write-HealthSummary {
 function Write-DiagnosticConclusions {
   param([hashtable]$Health)
   
-  Write-Log ""
-  Write-Log "=== DIAGNOSTIC CONCLUSIONS ==="
+  Write-Section "DIAGNOSTIC CONCLUSIONS"
   
   # Analyze the health results to provide clear guidance
   $linkState = ($Health.Values | Where-Object { $_ -match 'Ethernet link state' })
@@ -98,79 +97,75 @@ function Write-DiagnosticConclusions {
   
   # Generate conclusions
   if ($workingComponents.Count -gt 0) {
-    Write-Log "✓ WORKING COMPONENTS:"
-    foreach ($component in $workingComponents) {
-      Write-Log "  - $component"
-    }
+    Write-Label "WORKING COMPONENTS"
+    foreach ($component in $workingComponents) { Write-ListItem $component 1 }
   }
   
   if ($problemAreas.Count -gt 0) {
-    Write-Log ""
-    Write-Log "✗ PROBLEM AREAS:"
-    foreach ($problem in $problemAreas) {
-      Write-Log "  - $problem"
-    }
+    Write-Blank
+    Write-Label "PROBLEM AREAS"
+    foreach ($problem in $problemAreas) { Write-ListItem $problem 1 }
   }
   
   # Provide specific guidance based on the failure point
-  Write-Log ""
-  Write-Log "=== TROUBLESHOOTING GUIDANCE ==="
+  Write-Blank
+  Write-Section "TROUBLESHOOTING GUIDANCE"
   
   if ($physicalAdapterValue -and $physicalAdapterValue -match 'FAIL \(none found\)') {
-    Write-Log "NO ETHERNET ADAPTER DETECTED:"
-    Write-Log "  - If using a built-in (internal) Ethernet port:"
-    Write-Log "    - Check Device Manager for disabled or missing adapter"
-    Write-Log "    - Ensure the adapter is enabled and drivers are installed"
-    Write-Log "  - If using a USB Ethernet adapter (external):"
-    Write-Log "    - Unplug and replug the adapter"
-    Write-Log "    - Try a different USB port (prefer USB 3.0/blue)"
-    Write-Log "    - If available, try a different USB-to-Ethernet dongle"
-    Write-Log "  - After resolving adapter detection, re-run diagnostics"
+    Write-Label "NO ETHERNET ADAPTER DETECTED"
+    Write-ListItem "If using a built-in (internal) Ethernet port:" 1
+    Write-ListItem "Check Device Manager for disabled or missing adapter" 2
+    Write-ListItem "Ensure the adapter is enabled and drivers are installed" 2
+    Write-ListItem "If using a USB Ethernet adapter (external):" 1
+    Write-ListItem "Unplug and replug the adapter" 2
+    Write-ListItem "Try a different USB port (prefer USB 3.0/blue)" 2
+    Write-ListItem "If available, try a different USB-to-Ethernet dongle" 2
+    Write-ListItem "After resolving adapter detection, re-run diagnostics" 1
   }
   elseif ($Health.Values -match 'FAIL.*Down') {
-    Write-Log "🔌 CABLE ISSUE DETECTED:"
-    Write-Log "  - Check Ethernet cable connection to ONT"
-    Write-Log "  - Try a different Ethernet cable"
-    Write-Log "  - Ensure cable is fully inserted at both ends"
-    Write-Log "  - Check ONT LAN port LED (should be solid green)"
+    Write-Label "CABLE ISSUE DETECTED"
+    Write-ListItem "Check Ethernet cable connection to ONT" 1
+    Write-ListItem "Try a different Ethernet cable" 1
+    Write-ListItem "Ensure cable is fully inserted at both ends" 1
+    Write-ListItem "Check ONT LAN port LED (should be solid green)" 1
   }
   elseif ($Health.Values -match 'WARN.*No ONTs reachable') {
-    Write-Log "📡 ONT/FIBER ISSUE DETECTED:"
-    Write-Log "  - Check ONT LEDs (PON should be solid green)"
-    Write-Log "  - Check fiber cable connection to ONT"
-    Write-Log "  - Contact Openreach if ONT shows problems"
-    Write-Log "  - This is likely an Openreach line/cabinet issue"
+    Write-Label "ONT/FIBER ISSUE DETECTED"
+    Write-ListItem "Check ONT LEDs (PON should be solid green)" 1
+    Write-ListItem "Check fiber cable connection to ONT" 1
+    Write-ListItem "Contact Openreach if ONT shows problems" 1
+    Write-ListItem "This is likely an Openreach line/cabinet issue" 1
   }
   elseif ($Health.Values -match 'PPPoE authentication.*FAIL') {
-    Write-Log "🔐 PROVIDER AUTHENTICATION ISSUE:"
-    Write-Log "  - Verify broadband username/password"
-    Write-Log "  - Check with broadband provider for account status"
-    Write-Log "  - This is likely a broadband provider issue"
+    Write-Label "PROVIDER AUTHENTICATION ISSUE"
+    Write-ListItem "Verify broadband username/password" 1
+    Write-ListItem "Check with broadband provider for account status" 1
+    Write-ListItem "This is likely a broadband provider issue" 1
   }
   elseif ($Health.Values -match 'PPP interface present.*FAIL') {
-    Write-Log "🌐 PROVIDER CONNECTION ISSUE:"
-    Write-Log "  - Provider authentication succeeded but connection failed"
-    Write-Log "  - Check with broadband provider"
-    Write-Log "  - This is likely a provider network issue"
+    Write-Label "PROVIDER CONNECTION ISSUE"
+    Write-ListItem "Provider authentication succeeded but connection failed" 1
+    Write-ListItem "Check with broadband provider" 1
+    Write-ListItem "This is likely a provider network issue" 1
   }
   elseif ($Health.Values -match 'Ping.*via PPP.*FAIL') {
-    Write-Log "🚫 PROVIDER NETWORK ISSUE:"
-    Write-Log "  - Connection established but internet access failed"
-    Write-Log "  - Check with broadband provider"
-    Write-Log "  - This is likely a provider routing/DNS issue"
+    Write-Label "PROVIDER NETWORK ISSUE"
+    Write-ListItem "Connection established but internet access failed" 1
+    Write-ListItem "Check with broadband provider" 1
+    Write-ListItem "This is likely a provider routing/DNS issue" 1
   }
   elseif ($workingComponents.Count -eq 0) {
-    Write-Log "❓ UNKNOWN ISSUE:"
-    Write-Log "  - Multiple components failed"
-    Write-Log "  - Check with broadband provider"
-    Write-Log "  - May need Openreach engineer visit"
+    Write-Label "UNKNOWN ISSUE"
+    Write-ListItem "Multiple components failed" 1
+    Write-ListItem "Check with broadband provider" 1
+    Write-ListItem "May need Openreach engineer visit" 1
   }
   else {
-    Write-Log "✅ ALL TESTS PASSED:"
-    Write-Log "  - Direct ONT connection works perfectly"
-    Write-Log "  - Problem is likely with router or WiFi setup"
-    Write-Log "  - Try connecting router to same Ethernet port"
-    Write-Log "  - Check router configuration and WiFi settings"
+    Write-Label "ALL TESTS PASSED"
+    Write-ListItem "Direct ONT connection works perfectly" 1
+    Write-ListItem "Problem is likely with router or WiFi setup" 1
+    Write-ListItem "Try connecting router to same Ethernet port" 1
+    Write-ListItem "Check router configuration and WiFi settings" 1
   }
 }
 

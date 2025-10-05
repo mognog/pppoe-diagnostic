@@ -29,6 +29,31 @@ function Write-Ok { param([string]$m) ; Write-Log "[OK] $m" }
 function Write-Warn { param([string]$m) ; Write-Log "[WARN] $m" }
 function Write-Err { param([string]$m) ; Write-Log "[FAIL] $m" }
 
+# Standardized ASCII formatting helpers for consistent, DRY output
+function Write-Section {
+  param([string]$Title)
+  if ($Title) {
+    Write-Log ""
+    Write-Log ("=== {0} ===" -f $Title)
+  }
+}
+
+function Write-Label {
+  param([string]$Text)
+  if ($Text) { Write-Log ("{0}:" -f $Text) }
+}
+
+function Write-ListItem {
+  param(
+    [string]$Text,
+    [int]$Indent = 1
+  )
+  $prefix = ("  " * [Math]::Max(0, $Indent)) + "- "
+  Write-Log ($prefix + $Text)
+}
+
+function Write-Blank { Write-Log "" }
+
 function Test-PwshVersion7Plus {
   try {
     $v = $PSVersionTable.PSVersion
