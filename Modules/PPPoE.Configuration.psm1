@@ -3,7 +3,10 @@
 Set-StrictMode -Version 3.0
 
 function ConvertTo-Hashtable {
-  param([object]$InputObject)
+  param(
+    [Parameter(ValueFromPipeline=$true)]
+    [object]$InputObject
+  )
   
   if ($InputObject -is [hashtable]) {
     return $InputObject
@@ -166,26 +169,30 @@ function Test-Configuration {
     $issues += "Network.PingCount must be at least 1"
   }
   
-  # Validate health check configuration
-  if ($Config.HealthChecks.PacketLossThreshold -lt 0 -or $Config.HealthChecks.PacketLossThreshold -gt 100) {
-    $issues += "HealthChecks.PacketLossThreshold must be between 0 and 100"
+  # Validate health check configuration (if it exists)
+  if ($Config.ContainsKey('HealthChecks')) {
+    if ($Config.HealthChecks.PacketLossThreshold -lt 0 -or $Config.HealthChecks.PacketLossThreshold -gt 100) {
+      $issues += "HealthChecks.PacketLossThreshold must be between 0 and 100"
+    }
+    
+    if ($Config.HealthChecks.JitterThreshold -lt 0) {
+      $issues += "HealthChecks.JitterThreshold must be non-negative"
+    }
+    
+    if ($Config.HealthChecks.RouteStabilityThreshold -lt 0 -or $Config.HealthChecks.RouteStabilityThreshold -gt 100) {
+      $issues += "HealthChecks.RouteStabilityThreshold must be between 0 and 100"
+    }
   }
   
-  if ($Config.HealthChecks.JitterThreshold -lt 0) {
-    $issues += "HealthChecks.JitterThreshold must be non-negative"
-  }
-  
-  if ($Config.HealthChecks.RouteStabilityThreshold -lt 0 -or $Config.HealthChecks.RouteStabilityThreshold -gt 100) {
-    $issues += "HealthChecks.RouteStabilityThreshold must be between 0 and 100"
-  }
-  
-  # Validate credential configuration
-  if ($Config.Credentials.MinUsernameLength -lt 1) {
-    $issues += "Credentials.MinUsernameLength must be at least 1"
-  }
-  
-  if ($Config.Credentials.MinPasswordLength -lt 1) {
-    $issues += "Credentials.MinPasswordLength must be at least 1"
+  # Validate credential configuration (if it exists)
+  if ($Config.ContainsKey('Credentials')) {
+    if ($Config.Credentials.MinUsernameLength -lt 1) {
+      $issues += "Credentials.MinUsernameLength must be at least 1"
+    }
+    
+    if ($Config.Credentials.MinPasswordLength -lt 1) {
+      $issues += "Credentials.MinPasswordLength must be at least 1"
+    }
   }
   
   return @{

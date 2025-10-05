@@ -18,19 +18,22 @@ try {
             $result = & $TestScript
             if ($result) {
                 Write-Host "PASS: $Name" -ForegroundColor Green
+                $script:passed++
                 return $true
             } else {
                 Write-Host "FAIL: $Name" -ForegroundColor Red
+                $script:failed++
                 return $false
             }
         } catch {
             Write-Host "FAIL: $Name - Error: $($_.Exception.Message)" -ForegroundColor Red
+            $script:failed++
             return $false
         }
     }
     
-    $passed = 0
-    $failed = 0
+    $script:passed = 0
+    $script:failed = 0
     
     # Test Get-ProjectConfiguration
     Test-Function "Get-ProjectConfiguration returns default config" {

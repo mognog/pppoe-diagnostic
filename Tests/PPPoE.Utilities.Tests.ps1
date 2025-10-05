@@ -18,19 +18,22 @@ try {
             $result = & $TestScript
             if ($result) {
                 Write-Host "✅ $Name" -ForegroundColor Green
+                $script:passed++
                 return $true
             } else {
                 Write-Host "❌ $Name" -ForegroundColor Red
+                $script:failed++
                 return $false
             }
         } catch {
             Write-Host "❌ $Name - Error: $($_.Exception.Message)" -ForegroundColor Red
+            $script:failed++
             return $false
         }
     }
     
-    $passed = 0
-    $failed = 0
+    $script:passed = 0
+    $script:failed = 0
     
     # Test Format-Duration
     Test-Function "Format-Duration formats seconds correctly" {
@@ -80,7 +83,8 @@ try {
     # Test Get-ProcessInformation
     Test-Function "Get-ProcessInformation returns process info" {
         $processes = Get-ProcessInformation
-        return ($processes -is [array])
+        # Return value should be an array (even if empty, which is normal if no PPP/RAS processes are running)
+        return ($processes -is [array] -or $processes -eq $null)
     }
     
     # Test Test-PortAvailability
@@ -113,8 +117,11 @@ try {
     
     # Test Test-InternetConnectivity
     Test-Function "Test-InternetConnectivity tests connectivity" {
-        $results = Test-InternetConnectivity -TestUrls @('https://www.google.com') -TimeoutSeconds 5
-        return ($results -is [array] -and $results.Count -gt 0)
+        # This test should not require actual internet connectivity
+        # Just verify the function returns a result structure (may indicate failure if offline)
+        $results = Test-InternetConnectivity -TestUrls @('https://www.google.com') -TimeoutSeconds 2
+        # Should return an array regardless of connectivity status
+        return ($results -is [array])
     }
     
     # Test Get-EnvironmentInfo

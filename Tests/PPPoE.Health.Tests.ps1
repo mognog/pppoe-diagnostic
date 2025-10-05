@@ -260,8 +260,11 @@ if ($pesterAvailable) {
     
     if ($testResults.Failed -gt 0) {
         Write-Host "`n❌ Failed Tests:" -ForegroundColor Red
-        $testResults.Tests | Where-Object { $_.Status -eq "FAIL" } | ForEach-Object {
-            Write-Host "  - $($_.Name): $($_.Result)" -ForegroundColor Red
+        $failedTests = $testResults.Tests | Where-Object { $_.Status -eq "FAIL" }
+        if ($failedTests) {
+            $failedTests | ForEach-Object {
+                Write-Host "  - $($_.Name): $($_.Result)" -ForegroundColor Red
+            }
         }
         exit 1
     } else {

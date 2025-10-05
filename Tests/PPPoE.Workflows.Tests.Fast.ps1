@@ -107,9 +107,9 @@ try {
         if (Test-Assertion "Handles null parameters" { $false }) { $passed++ } else { $failed++ }
     }
     
-    # Test SkipWifiToggle (no need to run full workflow again)
-    if (Test-Assertion "SkipWifiToggle parameter exists" {
-        (Get-Command Invoke-QuickDiagnosticWorkflow).Parameters.ContainsKey('SkipWifiToggle')
+    # Test SkipWifiToggle parameter - QuickDiagnostic doesn't have this, but full workflow does
+    if (Test-Assertion "SkipWifiToggle parameter exists on full workflow" {
+        (Get-Command Invoke-PPPoEDiagnosticWorkflow).Parameters.ContainsKey('SkipWifiToggle')
     }) { $passed++ } else { $failed++ }
     
     # Test TargetAdapter parameter
