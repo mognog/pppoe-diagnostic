@@ -129,18 +129,27 @@ function Write-DiagnosticConclusions {
     Write-ListItem "Ensure cable is fully inserted at both ends" 1
     Write-ListItem "Check ONT LAN port LED (should be solid green)" 1
   }
+  elseif ($Health.Values -match 'PPPoE authentication.*FAIL') {
+    Write-Label "CREDENTIALS/AUTHENTICATION ISSUE DETECTED"
+    Write-ListItem "Check your broadband username and password are correct" 1
+    Write-ListItem "Verify credentials in credentials.ps1 file or Windows saved credentials" 1
+    Write-ListItem "Test with script parameters: -UserName 'your@username' -Password 'yourpassword'" 1
+    Write-ListItem "Contact your broadband provider to verify account status" 1
+    Write-ListItem "This is likely a credentials or account issue" 1
+  }
+  elseif ($Health.Values -match 'Credentials source.*FAIL') {
+    Write-Label "CREDENTIALS NOT AVAILABLE"
+    Write-ListItem "No valid credentials found from any source" 1
+    Write-ListItem "Check credentials.ps1 file exists and has correct username/password" 1
+    Write-ListItem "Or provide credentials as script parameters" 1
+    Write-ListItem "Or ensure Windows has saved credentials for this connection" 1
+  }
   elseif ($Health.Values -match 'WARN.*No ONTs reachable') {
     Write-Label "ONT/FIBER ISSUE DETECTED"
     Write-ListItem "Check ONT LEDs (PON should be solid green)" 1
     Write-ListItem "Check fiber cable connection to ONT" 1
     Write-ListItem "Contact Openreach if ONT shows problems" 1
     Write-ListItem "This is likely an Openreach line/cabinet issue" 1
-  }
-  elseif ($Health.Values -match 'PPPoE authentication.*FAIL') {
-    Write-Label "PROVIDER AUTHENTICATION ISSUE"
-    Write-ListItem "Verify broadband username/password" 1
-    Write-ListItem "Check with broadband provider for account status" 1
-    Write-ListItem "This is likely a broadband provider issue" 1
   }
   elseif ($Health.Values -match 'PPP interface present.*FAIL') {
     Write-Label "PROVIDER CONNECTION ISSUE"
