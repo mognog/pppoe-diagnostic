@@ -304,7 +304,9 @@ function Test-QuickConnectivityCheck {
     Start-Sleep -Milliseconds 50
   }
   
-  $successful = ($results | Where-Object { $_.Success }).Count
+  # Safe array handling - Where-Object returns null when no matches found
+  $successfulResults = $results | Where-Object { $_.Success }
+  $successful = if ($successfulResults) { $successfulResults.Count } else { 0 }
   $successRate = [Math]::Round(($successful / 5) * 100, 1)
   
   & $WriteLog "Quick check complete: $successful/5 tests passed ($successRate%)"

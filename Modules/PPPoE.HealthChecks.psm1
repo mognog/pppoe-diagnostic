@@ -408,7 +408,9 @@ function Invoke-ConnectivityChecks {
   & $WriteLog ""
   & $WriteLog "=== MULTI-DESTINATION ROUTING ANALYSIS ==="
   $routingResults = Test-MultiDestinationRouting -WriteLog $WriteLog
-  $completeRoutes = ($routingResults | Where-Object { $_.Status -eq "COMPLETE" }).Count
+  # Safe array handling - Where-Object returns null when no matches found
+  $completeRoutesResults = $routingResults | Where-Object { $_.Status -eq "COMPLETE" }
+  $completeRoutes = if ($completeRoutesResults) { $completeRoutesResults.Count } else { 0 }
   $totalRoutes = $routingResults.Count
   
   if ($completeRoutes -eq $totalRoutes) {
@@ -424,7 +426,9 @@ function Invoke-ConnectivityChecks {
   & $WriteLog "=== FIREWALL STATE CHECK ==="
   $firewallState = Test-FirewallState -WriteLog $WriteLog
   if ($firewallState) {
-    $enabledProfiles = ($firewallState.Profiles | Where-Object { $_.Enabled }).Count
+    # Safe array handling - Where-Object returns null when no matches found
+    $enabledProfilesResults = $firewallState.Profiles | Where-Object { $_.Enabled }
+    $enabledProfiles = if ($enabledProfilesResults) { $enabledProfilesResults.Count } else { 0 }
     if ($enabledProfiles -gt 0) {
       $Health = Add-Health $Health 'Windows Firewall' "WARN ($enabledProfiles profiles enabled)" 19.3
     } else {
@@ -446,7 +450,9 @@ function Invoke-ConnectivityChecks {
   # DNS Resolution Tests
   & $WriteLog "Testing DNS resolution capabilities..."
   $dnsResults = Test-DNSResolution -InterfaceAlias $PPPInterface.InterfaceAlias -WriteLog $WriteLog
-  $dnsSuccess = ($dnsResults | Where-Object { $_.Status -eq 'OK' }).Count
+  # Safe array handling - Where-Object returns null when no matches found
+  $dnsSuccessResults = $dnsResults | Where-Object { $_.Status -eq 'OK' }
+  $dnsSuccess = if ($dnsSuccessResults) { $dnsSuccessResults.Count } else { 0 }
   $dnsTotal = $dnsResults.Count
   if ($dnsSuccess -eq $dnsTotal) {
     $Health = Add-Health $Health 'DNS resolution' 'OK (All DNS servers working)' 21
@@ -481,12 +487,13 @@ function Invoke-ConnectivityChecks {
   # Interface Statistics
   & $WriteLog "Checking PPP interface statistics..."
   $interfaceStats = Get-InterfaceStatistics -InterfaceName $PPPInterface.InterfaceAlias -WriteLog $WriteLog
-  if ($interfaceStats -and $interfaceStats.Errors.Count -eq 0) {
+  if ($interfaceStats -and $interfaceStats.Errors -and $interfaceStats.Errors.Count -eq 0) {
     $Health = Add-Health $Health 'Interface statistics' 'OK (No errors detected)' 24
   } elseif ($interfaceStats) {
     $Health = Add-Health $Health 'Interface statistics' 'WARN (Some errors detected)' 24
   } else {
-    $Health = Add-Health $Health 'Interface statistics' 'FAIL (Could not retrieve stats)' 24
+    # PPP interfaces are virtual and don't always support hardware statistics
+    $Health = Add-Health $Health 'Interface statistics' 'N/A (Virtual PPP interface)' 24
   }
 
   return $Health
@@ -518,29 +525,39 @@ function Invoke-AdvancedConnectivityChecks {
   # Connection Jitter Test
   & $WriteLog "Testing connection jitter..."
   $jitterTest = Test-ConnectionJitter -TargetIP '1.1.1.1' -Count 15 -WriteLog $WriteLog
-  if ($jitterTest.Jitter -le 10) {
-    $Health = Add-Health $Health 'Connection jitter' "OK (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
-  } elseif ($jitterTest.Jitter -le 50) {
-    $Health = Add-Health $Health 'Connection jitter' "WARN (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
+  if ($jitterTest -and $jitterTest.SuccessfulPackets -gt 1) {
+    if ($jitterTest.Jitter -le 10) {
+      $Health = Add-Health $Health 'Connection jitter' "OK ($($jitterTest.Jitter)ms jitter, $($jitterTest.AvgLatency)ms avg)" 26
+    } elseif ($jitterTest.Jitter -le 50) {
+      $Health = Add-Health $Health 'Connection jitter' "WARN ($($jitterTest.Jitter)ms jitter, $($jitterTest.AvgLatency)ms avg)" 26
+    } else {
+      $Health = Add-Health $Health 'Connection jitter' "FAIL ($($jitterTest.Jitter)ms jitter, $($jitterTest.AvgLatency)ms avg)" 26
+    }
   } else {
-    $Health = Add-Health $Health 'Connection jitter' "FAIL (${jitterTest.Jitter}ms jitter, ${jitterTest.AvgLatency}ms avg)" 26
+    $Health = Add-Health $Health 'Connection jitter' 'FAIL (Insufficient packets for jitter analysis)' 26
   }
 
   # Burst Connectivity Test
   & $WriteLog "Testing burst connectivity..."
   $burstTest = Test-BurstConnectivity -TargetIP '1.1.1.1' -BurstSize 5 -BurstCount 3 -WriteLog $WriteLog
-  if ($burstTest.AvgBurstSuccess -ge 90) {
-    $Health = Add-Health $Health 'Burst connectivity' "OK (${burstTest.AvgBurstSuccess}% avg success)" 27
-  } elseif ($burstTest.AvgBurstSuccess -ge 70) {
-    $Health = Add-Health $Health 'Burst connectivity' "WARN (${burstTest.AvgBurstSuccess}% avg success)" 27
+  if ($burstTest -and $burstTest.AvgBurstSuccess -ne $null) {
+    if ($burstTest.AvgBurstSuccess -ge 90) {
+      $Health = Add-Health $Health 'Burst connectivity' "OK ($($burstTest.AvgBurstSuccess)% avg success)" 27
+    } elseif ($burstTest.AvgBurstSuccess -ge 70) {
+      $Health = Add-Health $Health 'Burst connectivity' "WARN ($($burstTest.AvgBurstSuccess)% avg success)" 27
+    } else {
+      $Health = Add-Health $Health 'Burst connectivity' "FAIL ($($burstTest.AvgBurstSuccess)% avg success)" 27
+    }
   } else {
-    $Health = Add-Health $Health 'Burst connectivity' "FAIL (${burstTest.AvgBurstSuccess}% avg success)" 27
+    $Health = Add-Health $Health 'Burst connectivity' 'FAIL (Test did not complete)' 27
   }
 
   # Provider-Specific Diagnostics
   & $WriteLog "Running provider-specific diagnostics..."
   $providerDiagnostics = Test-ProviderSpecificDiagnostics -InterfaceAlias $PPPInterface.InterfaceAlias -WriteLog $WriteLog
-  $providerSuccess = ($providerDiagnostics | Where-Object { $_.Status -eq 'OK' }).Count
+  # Safe array handling - Where-Object returns null when no matches found
+  $providerSuccessResults = $providerDiagnostics | Where-Object { $_.Status -eq 'OK' }
+  $providerSuccess = if ($providerSuccessResults) { $providerSuccessResults.Count } else { 0 }
   $providerTotal = $providerDiagnostics.Count
   if ($providerSuccess -eq $providerTotal) {
     $Health = Add-Health $Health 'Provider diagnostics' "OK (All $providerTotal tests passed)" 28

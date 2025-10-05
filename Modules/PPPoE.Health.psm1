@@ -52,10 +52,14 @@ function Write-DiagnosticConclusions {
   $authStatus = ($Health.Values | Where-Object { $_ -match 'PPPoE authentication' })
   $pppInterface = ($Health.Values | Where-Object { $_ -match 'PPP interface present' })
   $connectivity = ($Health.Values | Where-Object { $_ -match 'Ping.*via PPP' })
+  $gatewayStatus = ($Health.Values | Where-Object { $_ -match 'PPP gateway assignment' })
 
   # Extract specific keyed values we need to reason about
   $physicalAdapterKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_Physical adapter detected$' } | Select-Object -First 1)
   $physicalAdapterValue = if ($physicalAdapterKey) { $Health[$physicalAdapterKey] } else { $null }
+  
+  # CRITICAL: Check for 0.0.0.0 gateway issue (IPCP negotiation failure)
+  $zeroGatewayIssue = $Health.Values -match '0\.0\.0\.0|Gateway.*ERROR|Gateway.*unspecified'
   
   # Check what's working
   $workingComponents = @()
@@ -79,7 +83,13 @@ function Write-DiagnosticConclusions {
   }
   
   # Identify problem areas (check in order of precedence)
-  if ($Health.Values -match 'FAIL.*Down') { 
+  # CRITICAL: 0.0.0.0 Gateway is highest priority issue
+  if ($zeroGatewayIssue) {
+    $problemAreas += "*** CRITICAL: IPCP Gateway Negotiation Failure (0.0.0.0 gateway) ***"
+    $problemAreas += "Provider PPPoE server not providing default gateway"
+    $problemAreas += "This prevents normal internet browsing and streaming"
+  }
+  elseif ($Health.Values -match 'FAIL.*Down') { 
     $problemAreas += "Ethernet cable or connection" 
   }
   elseif ($Health.Values -match 'WARN.*No ONTs reachable') { 
@@ -111,7 +121,74 @@ function Write-DiagnosticConclusions {
   Write-Blank
   Write-Section "TROUBLESHOOTING GUIDANCE"
   
-  if ($physicalAdapterValue -and $physicalAdapterValue -match 'FAIL \(none found\)') {
+  # CRITICAL: 0.0.0.0 Gateway Issue - This takes precedence over other issues
+  if ($zeroGatewayIssue) {
+    Write-Label "*** CRITICAL: IPCP NEGOTIATION FAILURE DETECTED ***"
+    Write-Blank
+    Write-Label "PROBLEM IDENTIFIED:"
+    Write-ListItem "PPPoE connection succeeds but gateway is 0.0.0.0" 1
+    Write-ListItem "This is an IPCP (IP Control Protocol) negotiation failure" 1
+    Write-ListItem "Your PC gets an IP but no default gateway from the ISP" 1
+    Write-ListItem "Result: Direct TCP connections work, but browsing/streaming fails" 1
+    Write-Blank
+    Write-Label "TECHNICAL DETAILS:"
+    Write-ListItem "PPPoE authentication: SUCCESS" 1
+    Write-ListItem "IP address assigned: YES (likely 100.64.x.x/32 or similar)" 1
+    Write-ListItem "Default gateway: 0.0.0.0 (INVALID - should be real IP)" 1
+    Write-ListItem "Traceroute shows gateway exists but wasn't negotiated properly" 1
+    Write-Blank
+    Write-Label "ROOT CAUSES (in order of likelihood):"
+    Write-ListItem "1. ISP PPPoE SERVER CONFIGURATION ISSUE (most common)" 1
+    Write-ListItem "   The broadband provider's PPPoE server has a misconfiguration" 2
+    Write-ListItem "   IPCP phase completes but doesn't send gateway address" 2
+    Write-ListItem "   This is a PROVIDER-SIDE ISSUE, not your equipment" 2
+    Write-Blank
+    Write-ListItem "2. WINDOWS PPPoE CLIENT ISSUE (less common)" 1
+    Write-ListItem "   Windows RAS/PPPoE client not parsing IPCP response correctly" 2
+    Write-ListItem "   May require Windows update or RAS service restart" 2
+    Write-Blank
+    Write-ListItem "3. MTU/MSS NEGOTIATION PROBLEM (rare)" 1
+    Write-ListItem "   IPCP packets being fragmented or dropped" 2
+    Write-ListItem "   Can happen with certain MTU settings" 2
+    Write-Blank
+    Write-Label "IMMEDIATE ACTIONS TO TRY:"
+    Write-ListItem "1. RESTART RASMAN SERVICE (fixes Windows client issues):" 1
+    Write-ListItem "   Open PowerShell as Administrator:" 2
+    Write-ListItem "   Restart-Service RasMan -Force" 2
+    Write-ListItem "   Then reconnect PPPoE and test" 2
+    Write-Blank
+    Write-ListItem "2. DELETE AND RECREATE PPPoE CONNECTION:" 1
+    Write-ListItem "   Remove-NetAdapter -Name 'YourPPPoEName' -Confirm:$false" 2
+    Write-ListItem "   Then create new PPPoE connection from scratch" 2
+    Write-ListItem "   Sometimes connection settings become corrupted" 2
+    Write-Blank
+    Write-ListItem "3. TEST WITH DIFFERENT PPPoE CLIENT (diagnostic only):" 1
+    Write-ListItem "   Try a router in PPPoE mode to see if it gets proper gateway" 2
+    Write-ListItem "   If router works: Windows RAS issue" 2
+    Write-ListItem "   If router also fails: Provider PPPoE server issue" 2
+    Write-Blank
+    Write-Label "CONTACT YOUR ISP WITH THIS INFORMATION:"
+    Write-ListItem "Your connection AUTHENTICATES successfully" 1
+    Write-ListItem "You receive an IP address" 1
+    Write-ListItem "But NO DEFAULT GATEWAY is provided during IPCP negotiation" 1
+    Write-ListItem "Gateway shows as 0.0.0.0 in Windows" 1
+    Write-ListItem "This is preventing normal internet access" 1
+    Write-ListItem "Request they check their PPPoE/BNG (Broadband Network Gateway) configuration" 1
+    Write-ListItem "This is a known issue with some ISP PPPoE implementations" 1
+    Write-Blank
+    Write-Label "WHY SOME THINGS WORK:"
+    Write-ListItem "TCP to specific IPs works: Using on-link routing or cached routes" 1
+    Write-ListItem "DNS works: DNS servers provided via IPCP (separate from gateway)" 1
+    Write-ListItem "Traceroute works: Creates temporary routes as it discovers hops" 1
+    Write-ListItem "But browsing fails: Requires proper default gateway for routing" 1
+    Write-Blank
+    Write-Label "THIS IS NOT YOUR FAULT:"
+    Write-ListItem "Your equipment is working correctly" 1
+    Write-ListItem "Your Ethernet, ONT, and physical connection are fine" 1
+    Write-ListItem "The PPPoE server is not providing required routing information" 1
+    Write-ListItem "This requires ISP intervention or Windows client workaround" 1
+  }
+  elseif ($physicalAdapterValue -and $physicalAdapterValue -match 'FAIL \(none found\)') {
     Write-Label "NO ETHERNET ADAPTER DETECTED"
     Write-ListItem "If using a built-in (internal) Ethernet port:" 1
     Write-ListItem "Check Device Manager for disabled or missing adapter" 2

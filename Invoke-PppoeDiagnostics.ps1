@@ -19,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module "$here/Modules/PPPoE.Core.psm1" -Force
 Import-Module "$here/Modules/PPPoE.Net.psm1" -Force
+Import-Module "$here/Modules/PPPoE.Net.SmartTests.psm1" -Force
 Import-Module "$here/Modules/PPPoE.Logging.psm1" -Force
 Import-Module "$here/Modules/PPPoE.Health.psm1" -Force
 Import-Module "$here/Modules/PPPoE.HealthChecks.psm1" -Force

@@ -151,6 +151,49 @@ function Test-FirewallState {
       $firewallResults += @{ Profile = $firewallProfile.Name; Enabled = $firewallProfile.Enabled }
     }
     
+    # Check for ICMP (ping) firewall rules
+    & $WriteLog "Checking ICMP firewall rules..."
+    $icmpRules = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {
+      $_.DisplayName -match "ICMP|ICMPv4|Echo|Ping" -or
+      $_.Name -match "ICMP|Echo"
+    }
+    
+    if ($icmpRules) {
+      $icmpInbound = $icmpRules | Where-Object { $_.Direction -eq "Inbound" -and $_.Enabled }
+      $icmpOutbound = $icmpRules | Where-Object { $_.Direction -eq "Outbound" -and $_.Enabled }
+      
+      if ($icmpInbound) {
+        # Safe array handling - Where-Object returns null when no matches found
+        $allowResults = $icmpInbound | Where-Object { $_.Action -eq "Allow" }
+        $blockResults = $icmpInbound | Where-Object { $_.Action -eq "Block" }
+        $allowCount = if ($allowResults) { $allowResults.Count } else { 0 }
+        $blockCount = if ($blockResults) { $blockResults.Count } else { 0 }
+        & $WriteLog "  ICMP Inbound: $($icmpInbound.Count) active rules ($allowCount allow, $blockCount block)"
+        
+        # Show first few blocking rules
+        if ($blockResults) {
+          foreach ($rule in $blockResults | Select-Object -First 2) {
+            & $WriteLog "    BLOCKING: $($rule.DisplayName) [$($rule.Profile)]"
+          }
+        }
+      } else {
+        & $WriteLog "  ICMP Inbound: No active rules (default policy applies)"
+      }
+      
+      if ($icmpOutbound) {
+        # Safe array handling
+        $allowResults = $icmpOutbound | Where-Object { $_.Action -eq "Allow" }
+        $blockResults = $icmpOutbound | Where-Object { $_.Action -eq "Block" }
+        $allowCount = if ($allowResults) { $allowResults.Count } else { 0 }
+        $blockCount = if ($blockResults) { $blockResults.Count } else { 0 }
+        & $WriteLog "  ICMP Outbound: $($icmpOutbound.Count) active rules ($allowCount allow, $blockCount block)"
+      } else {
+        & $WriteLog "  ICMP Outbound: No active rules (default policy applies)"
+      }
+    } else {
+      & $WriteLog "  ICMP Rules: No explicit ICMP rules found"
+    }
+    
     # Check for PPP-specific firewall rules
     $pppRules = Get-NetFirewallRule -DisplayName "*PPP*" -ErrorAction SilentlyContinue
     if ($pppRules) {
@@ -166,6 +209,7 @@ function Test-FirewallState {
     return @{
       Profiles = $firewallResults
       PPPRules = $pppRules
+      ICMPRules = $icmpRules
     }
     
   } catch {
