@@ -1422,7 +1422,7 @@ function Test-SustainedConnection {
   $failedConnections = $results | Where-Object { $_.ConnectionLost -eq $true -or $_.StabilityPercent -lt 70 }
   
   $avgStability = [Math]::Round(($results | Where-Object { $_.StabilityPercent -gt 0 } | Measure-Object -Property StabilityPercent -Average).Average, 1)
-  $avgConnectionTime = [Math]::Round(($results | Where-Object { $_.ConnectionTime -ne $null } | Measure-Object -Property ConnectionTime -Average).Average, 1)
+  $avgConnectionTime = [Math]::Round(($results | Where-Object { $null -ne $_.ConnectionTime } | Measure-Object -Property ConnectionTime -Average).Average, 1)
   
   & $WriteLog "Sustained Connection Analysis:"
   & $WriteLog "  Average stability: $avgStability%"
@@ -1433,7 +1433,7 @@ function Test-SustainedConnection {
   if ($failedConnections.Count -gt 0) {
     & $WriteLog "  Services with connection issues:"
     foreach ($service in $failedConnections) {
-      $issue = if ($service.PSObject.Properties['Error'] -and $service.Error -ne $null) { $service.Error } else { "$($service.StabilityPercent)% stability" }
+      $issue = if ($service.PSObject.Properties['Error'] -and $null -ne $service.Error) { $service.Error } else { "$($service.StabilityPercent)% stability" }
       & $WriteLog "    - $($service.Service): $issue"
     }
   }
@@ -1590,6 +1590,777 @@ function Test-LargePacketHandling {
     RecommendedMTU = $recommendedMTU
     PacketResults = $results
     Diagnosis = if (-not $mtuConfigured) { if ($mtuIssues.Count -gt 0) { "MTU_FRAGMENTATION_ISSUES" } else { "SEVERE_PACKET_LIMITATIONS" } } else { "MTU_CONFIGURATION_OK" }
+  }
+}
+
+function Test-PortExhaustionDetection {
+  <#
+  .SYNOPSIS
+  Enhanced port exhaustion test to detect CGNAT connection limits
+  .DESCRIPTION
+  Opens 100+ simultaneous connections to different hosts and tracks which succeed/fail.
+  This specifically tests CGNAT port allocation limits that cause streaming failures.
+  #>
+  param(
+    [int]$ConnectionCount = 150,
+    [int]$ConnectionTimeoutSeconds = 10,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing CGNAT port exhaustion limits..."
+  & $WriteLog "This test opens $ConnectionCount simultaneous connections to detect port limits"
+  & $WriteLog "CGNAT shares one public IP among many customers - insufficient ports cause failures"
+  
+  # Diverse test hosts to test different IP ranges
+  $testHosts = @(
+    @{ Name = "Google DNS"; Host = "8.8.8.8"; Port = 53 },
+    @{ Name = "Cloudflare DNS"; Host = "1.1.1.1"; Port = 53 },
+    @{ Name = "Quad9 DNS"; Host = "9.9.9.9"; Port = 53 },
+    @{ Name = "OpenDNS"; Host = "208.67.222.222"; Port = 53 },
+    @{ Name = "Google HTTPS"; Host = "google.com"; Port = 443 },
+    @{ Name = "Cloudflare HTTPS"; Host = "cloudflare.com"; Port = 443 },
+    @{ Name = "GitHub"; Host = "github.com"; Port = 443 },
+    @{ Name = "StackOverflow"; Host = "stackoverflow.com"; Port = 443 },
+    @{ Name = "Reddit"; Host = "reddit.com"; Port = 443 },
+    @{ Name = "Wikipedia"; Host = "wikipedia.org"; Port = 443 },
+    @{ Name = "Netflix"; Host = "netflix.com"; Port = 443 },
+    @{ Name = "YouTube"; Host = "youtube.com"; Port = 443 },
+    @{ Name = "Apple"; Host = "apple.com"; Port = 443 },
+    @{ Name = "Microsoft"; Host = "microsoft.com"; Port = 443 },
+    @{ Name = "Amazon"; Host = "amazon.com"; Port = 443 },
+    @{ Name = "Facebook"; Host = "facebook.com"; Port = 443 },
+    @{ Name = "Twitter"; Host = "twitter.com"; Port = 443 },
+    @{ Name = "LinkedIn"; Host = "linkedin.com"; Port = 443 },
+    @{ Name = "Instagram"; Host = "instagram.com"; Port = 443 },
+    @{ Name = "Spotify"; Host = "spotify.com"; Port = 443 },
+    @{ Name = "Twitch"; Host = "twitch.tv"; Port = 443 },
+    @{ Name = "Disney+"; Host = "disneyplus.com"; Port = 443 },
+    @{ Name = "HBO Max"; Host = "hbomax.com"; Port = 443 },
+    @{ Name = "Hulu"; Host = "hulu.com"; Port = 443 },
+    @{ Name = "Prime Video"; Host = "primevideo.com"; Port = 443 },
+    @{ Name = "Steam"; Host = "steamcommunity.com"; Port = 443 },
+    @{ Name = "Discord"; Host = "discord.com"; Port = 443 },
+    @{ Name = "Zoom"; Host = "zoom.us"; Port = 443 },
+    @{ Name = "Teams"; Host = "teams.microsoft.com"; Port = 443 },
+    @{ Name = "Slack"; Host = "slack.com"; Port = 443 }
+  )
+  
+  $results = @()
+  $successfulConnections = @()
+  $failedConnections = @()
+  
+  & $WriteLog "Attempting to establish $ConnectionCount simultaneous connections..."
+  
+  # Create connection tasks
+  $connectionTasks = @()
+  $hostIndex = 0
+  
+  for ($i = 1; $i -le $ConnectionCount; $i++) {
+    # Cycle through test hosts
+    $testHost = $testHosts[$hostIndex % $testHosts.Count]
+    $hostIndex++
+    
+    $task = [System.Threading.Tasks.Task]::Run({
+      param($hostInfo, $logCallback, $connectionNum, $timeoutSec)
+      
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = $timeoutSec * 1000
+        $tcpClient.SendTimeout = $timeoutSec * 1000
+        
+        # Attempt connection with timeout
+        $connectTask = $tcpClient.ConnectAsync($hostInfo.Host, $hostInfo.Port)
+        $timeoutTask = [System.Threading.Tasks.Task]::Delay($timeoutSec * 1000)
+        
+        $completedTask = [System.Threading.Tasks.Task]::WaitAny($connectTask, $timeoutTask)
+        
+        if ($completedTask -eq 0 -and $tcpClient.Connected) {
+          # Connection successful - hold it briefly
+          Start-Sleep -Milliseconds 500
+          $tcpClient.Close()
+          
+          return @{
+            ConnectionNumber = $connectionNum
+            Host = $hostInfo.Name
+            Target = "$($hostInfo.Host):$($hostInfo.Port)"
+            Success = $true
+            Error = $null
+            ErrorType = $null
+            ConnectionTime = $null
+          }
+        } else {
+          $tcpClient.Close()
+          
+          $errorType = if ($completedTask -eq 1) { "TIMEOUT" } else { "CONNECTION_FAILED" }
+          return @{
+            ConnectionNumber = $connectionNum
+            Host = $hostInfo.Name
+            Target = "$($hostInfo.Host):$($hostInfo.Port)"
+            Success = $false
+            Error = if ($completedTask -eq 1) { "Connection timeout" } else { "Connection failed" }
+            ErrorType = $errorType
+            ConnectionTime = $null
+          }
+        }
+      } catch {
+        return @{
+          ConnectionNumber = $connectionNum
+          Host = $hostInfo.Name
+          Target = "$($hostInfo.Host):$($hostInfo.Port)"
+          Success = $false
+          Error = $_.Exception.Message
+          ErrorType = "EXCEPTION"
+          ConnectionTime = $null
+        }
+      }
+    }, $testHost, $WriteLog, $i, $ConnectionTimeoutSeconds)
+    
+    $connectionTasks += $task
+  }
+  
+  # Monitor progress
+  & $WriteLog "Waiting for all connection attempts to complete..."
+  $completedCount = 0
+  $progressInterval = 10  # Report progress every 10 connections
+  
+  while ($completedCount -lt $ConnectionCount) {
+    $completedTasks = $connectionTasks | Where-Object { $_.IsCompleted }
+    $newCompleted = $completedTasks.Count - $completedCount
+    
+    if ($newCompleted -ge $progressInterval -or $completedCount -eq 0) {
+      $completedCount = $completedTasks.Count
+      $successCount = ($completedTasks | Where-Object { $_.Result.Success }).Count
+      $failureCount = $completedCount - $successCount
+      
+      & $WriteLog "  Progress: $completedCount/$ConnectionCount connections completed ($successCount successful, $failureCount failed)"
+    }
+    
+    Start-Sleep -Milliseconds 500
+  }
+  
+  # Wait for all to complete
+  [System.Threading.Tasks.Task]::WaitAll($connectionTasks)
+  
+  # Collect results
+  foreach ($task in $connectionTasks) {
+    $result = $task.Result
+    $results += $result
+    
+    if ($result.Success) {
+      $successfulConnections += $result
+    } else {
+      $failedConnections += $result
+    }
+  }
+  
+  # Analyze results
+  $totalConnections = $results.Count
+  $successCount = $successfulConnections.Count
+  $failureCount = $failedConnections.Count
+  $successRate = [Math]::Round(($successCount / $totalConnections) * 100, 1)
+  
+  & $WriteLog "Port Exhaustion Test Results:"
+  & $WriteLog "  Total connections attempted: $totalConnections"
+  & $WriteLog "  Successful connections: $successCount"
+  & $WriteLog "  Failed connections: $failureCount"
+  & $WriteLog "  Success rate: $successRate%"
+  
+  # Analyze failure patterns
+  $timeoutFailures = ($failedConnections | Where-Object { $_.ErrorType -eq "TIMEOUT" }).Count
+  $connectionFailures = ($failedConnections | Where-Object { $_.ErrorType -eq "CONNECTION_FAILED" }).Count
+  $exceptionFailures = ($failedConnections | Where-Object { $_.ErrorType -eq "EXCEPTION" }).Count
+  
+  & $WriteLog "  Failure breakdown:"
+  & $WriteLog "    Timeouts: $timeoutFailures"
+  & $WriteLog "    Connection failures: $connectionFailures"
+  & $WriteLog "    Exceptions: $exceptionFailures"
+  
+  # Analyze success rate by connection number (detect port exhaustion threshold)
+  $connectionsBySuccess = $results | Group-Object Success
+  $successfulResults = if ($connectionsBySuccess | Where-Object { $_.Name -eq $true }) { $connectionsBySuccess | Where-Object { $_.Name -eq $true } | Select-Object -First 1 } else { $null }
+  $failedResults = if ($connectionsBySuccess | Where-Object { $_.Name -eq $false }) { $connectionsBySuccess | Where-Object { $_.Name -eq $false } | Select-Object -First 1 } else { $null }
+  
+  if ($successfulResults -and $failedResults) {
+    $successfulNumbers = $successfulResults.Group | ForEach-Object { $_.ConnectionNumber } | Sort-Object
+    $failedNumbers = $failedResults.Group | ForEach-Object { $_.ConnectionNumber } | Sort-Object
+    
+    $minSuccessfulNumber = if ($successfulNumbers.Count -gt 0) { ($successfulNumbers | Measure-Object -Minimum).Minimum } else { $null }
+    $maxSuccessfulNumber = if ($successfulNumbers.Count -gt 0) { ($successfulNumbers | Measure-Object -Maximum).Maximum } else { $null }
+    $minFailedNumber = if ($failedNumbers.Count -gt 0) { ($failedNumbers | Measure-Object -Minimum).Minimum } else { $null }
+    
+    & $WriteLog "  Connection number analysis:"
+    & $WriteLog "    Successful connections: #$minSuccessfulNumber to #$maxSuccessfulNumber"
+    & $WriteLog "    First failure: #$minFailedNumber"
+    
+    # Detect port exhaustion threshold
+    if ($minFailedNumber -and $maxSuccessfulNumber -and $minFailedNumber -le $maxSuccessfulNumber + 10) {
+      $exhaustionThreshold = $minFailedNumber
+      & $WriteLog "    *** PORT EXHAUSTION THRESHOLD: ~$exhaustionThreshold connections ***"
+      & $WriteLog "    This suggests CGNAT port limit is reached around $exhaustionThreshold simultaneous connections"
+    }
+  }
+  
+  # Determine CGNAT capacity diagnosis
+  $cgnatLimitsDetected = $false
+  $cgnatPattern = ""
+  $diagnosis = ""
+  
+  if ($successRate -lt 30) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "SEVERE_PORT_LIMITS"
+    $diagnosis = "SEVERE_CGNAT_LIMITS"
+    & $WriteLog "  *** SEVERE CGNAT LIMITS DETECTED ***"
+    & $WriteLog "  Less than 30% of connections succeeded - CGNAT has very low port allocation"
+  } elseif ($successRate -lt 60 -and $timeoutFailures -gt $connectionFailures) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "MODERATE_PORT_LIMITS_WITH_TIMEOUTS"
+    $diagnosis = "MODERATE_CGNAT_LIMITS"
+    & $WriteLog "  *** MODERATE CGNAT LIMITS DETECTED ***"
+    & $WriteLog "  Timeout failures exceed connection failures - CGNAT port exhaustion with timeout pattern"
+  } elseif ($timeoutFailures -gt ($totalConnections * 0.4)) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "HIGH_TIMEOUT_RATE"
+    $diagnosis = "TIMEOUT_ISSUES"
+    & $WriteLog "  *** HIGH TIMEOUT RATE DETECTED ***"
+    & $WriteLog "  Over 40% of connections timed out - suggests CGNAT connection tracking issues"
+  } elseif ($successRate -lt 80) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "SOME_PORT_LIMITS"
+    $diagnosis = "SOME_CGNAT_LIMITS"
+    & $WriteLog "  *** SOME CGNAT LIMITS DETECTED ***"
+    & $WriteLog "  Success rate below 80% - CGNAT may have port allocation issues"
+  } else {
+    $cgnatPattern = "NO_SIGNIFICANT_LIMITS"
+    $diagnosis = "CGNAT_CAPACITY_OK"
+    & $WriteLog "  *** NO SIGNIFICANT CGNAT LIMITS DETECTED ***"
+    & $WriteLog "  Success rate above 80% - CGNAT port capacity appears adequate"
+  }
+  
+  # Impact analysis
+  & $WriteLog "CGNAT Impact Analysis:"
+  if ($cgnatLimitsDetected) {
+    if ($diagnosis -eq "SEVERE_CGNAT_LIMITS") {
+      & $WriteLog "  DIAGNOSIS: Severe CGNAT port limits - streaming will frequently fail"
+      & $WriteLog "  IMPACT: Netflix/Twitch will show 'connection failed' errors constantly"
+      & $WriteLog "  RECOMMENDATION: Contact ISP immediately - request static IP or CGNAT port limit increase"
+    } elseif ($diagnosis -eq "MODERATE_CGNAT_LIMITS") {
+      & $WriteLog "  DIAGNOSIS: Moderate CGNAT limits with timeout pattern"
+      & $WriteLog "  IMPACT: Streaming will work but fail during peak usage or with multiple apps"
+      & $WriteLog "  RECOMMENDATION: Monitor usage patterns, consider requesting static IP for heavy users"
+    } elseif ($diagnosis -eq "TIMEOUT_ISSUES") {
+      & $WriteLog "  DIAGNOSIS: CGNAT timeout issues - connection tracking problems"
+      & $WriteLog "  IMPACT: Apps will show 'timeout' errors more than 'connection failed'"
+      & $WriteLog "  RECOMMENDATION: ISP needs to fix CGNAT connection tracking configuration"
+    } else {
+      & $WriteLog "  DIAGNOSIS: Some CGNAT port allocation issues detected"
+      & $WriteLog "  IMPACT: Occasional streaming failures, especially with multiple simultaneous apps"
+      & $WriteLog "  RECOMMENDATION: Monitor and document specific failure scenarios"
+    }
+  } else {
+    & $WriteLog "  DIAGNOSIS: CGNAT port capacity is adequate"
+    & $WriteLog "  IMPACT: CGNAT is not limiting streaming performance"
+    & $WriteLog "  RECOMMENDATION: Investigate other factors (routing, DNS, bandwidth, etc.)"
+  }
+  
+  return @{
+    TotalConnections = $totalConnections
+    SuccessfulConnections = $successCount
+    FailedConnections = $failureCount
+    SuccessRate = $successRate
+    TimeoutFailures = $timeoutFailures
+    ConnectionFailures = $connectionFailures
+    ExceptionFailures = $exceptionFailures
+    CGNATLimitsDetected = $cgnatLimitsDetected
+    CGNATPattern = $cgnatPattern
+    Diagnosis = $diagnosis
+    ExhaustionThreshold = if ($minFailedNumber -and $maxSuccessfulNumber -and $minFailedNumber -le $maxSuccessfulNumber + 10) { $minFailedNumber } else { $null }
+    Results = $results
+  }
+}
+
+function Test-BandwidthConsistencyAnalysis {
+  <#
+  .SYNOPSIS
+  Tests sustained bandwidth consistency over time
+  .DESCRIPTION
+  Performs sustained transfers while graphing speed every second to detect:
+  - Stable vs fluctuating throughput
+  - Active rate limiting patterns
+  - Thermal throttling or interference
+  #>
+  param(
+    [int]$TestDurationSeconds = 60,
+    [int]$SampleIntervalSeconds = 1,
+    [string]$TestHost = 'httpbin.org',
+    [string]$TestPath = '/bytes/1048576',  # 1MB chunks
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing bandwidth consistency over time..."
+  & $WriteLog "Duration: $TestDurationSeconds seconds, sampling every $SampleIntervalSeconds second(s)"
+  & $WriteLog "This will detect speed fluctuations, rate limiting, and stability issues"
+  
+  $results = @()
+  $startTime = Get-Date
+  $endTime = $startTime.AddSeconds($TestDurationSeconds)
+  $sampleCount = 0
+  
+  # Test URL
+  $testUrl = "https://$TestHost$TestPath"
+  
+  & $WriteLog "Test URL: $testUrl"
+  & $WriteLog "Starting sustained bandwidth test..."
+  
+  while ((Get-Date) -lt $endTime) {
+    $sampleCount++
+    $currentTime = Get-Date
+    $elapsedSeconds = [Math]::Round(($currentTime - $startTime).TotalSeconds, 1)
+    
+    & $WriteLog "Sample $sampleCount at ${elapsedSeconds}s..."
+    
+    $sampleResult = @{
+      SampleNumber = $sampleCount
+      Timestamp = $currentTime
+      ElapsedSeconds = $elapsedSeconds
+      DownloadSpeedMbps = $null
+      DownloadTimeMs = $null
+      BytesDownloaded = $null
+      Success = $false
+      Error = $null
+    }
+    
+    try {
+      # Download test chunk with timing
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $response = Invoke-WebRequest -Uri $testUrl -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+      $sw.Stop()
+      
+      if ($response.StatusCode -eq 200 -and $response.Content) {
+        $downloadTimeMs = $sw.ElapsedMilliseconds
+        $bytesDownloaded = $response.Content.Length
+        $downloadSpeedMbps = [Math]::Round((($bytesDownloaded * 8) / ($downloadTimeMs / 1000)) / 1000000, 2)
+        
+        $sampleResult.DownloadSpeedMbps = $downloadSpeedMbps
+        $sampleResult.DownloadTimeMs = $downloadTimeMs
+        $sampleResult.BytesDownloaded = $bytesDownloaded
+        $sampleResult.Success = $true
+        
+        & $WriteLog "  Download: ${downloadSpeedMbps} Mbps (${downloadTimeMs}ms, ${bytesDownloaded} bytes)"
+      } else {
+        $sampleResult.Error = "Invalid response: Status $($response.StatusCode)"
+        & $WriteLog "  Download: FAILED - Invalid response"
+      }
+      
+    } catch {
+      $sampleResult.Error = $_.Exception.Message
+      & $WriteLog "  Download: FAILED - $($_.Exception.Message)"
+    }
+    
+    $results += $sampleResult
+    
+    # Wait for next sample
+    $nextSampleTime = $currentTime.AddSeconds($SampleIntervalSeconds)
+    if ($nextSampleTime -lt $endTime) {
+      $waitMs = [Math]::Round(($nextSampleTime - (Get-Date)).TotalMilliseconds)
+      if ($waitMs -gt 0) {
+        Start-Sleep -Milliseconds $waitMs
+      }
+    }
+  }
+  
+  # Analyze bandwidth consistency
+  & $WriteLog "Bandwidth Consistency Analysis:"
+  
+  $successfulSamples = $results | Where-Object { $_.Success -eq $true }
+  $totalSamples = $results.Count
+  $successRate = if ($totalSamples -gt 0) { [Math]::Round(($successfulSamples.Count / $totalSamples) * 100, 1) } else { 0 }
+  
+  & $WriteLog "  Total samples: $totalSamples"
+  & $WriteLog "  Successful samples: $($successfulSamples.Count)"
+  & $WriteLog "  Success rate: $successRate%"
+  
+  if ($successfulSamples -and $successfulSamples.Count -gt 0) {
+    $speeds = $successfulSamples | ForEach-Object { $_.DownloadSpeedMbps } | Where-Object { $_ -ne $null }
+    
+    if ($speeds -and $speeds.Count -gt 0) {
+      $avgSpeed = [Math]::Round(($speeds | Measure-Object -Average).Average, 2)
+      $minSpeed = [Math]::Round(($speeds | Measure-Object -Minimum).Minimum, 2)
+      $maxSpeed = [Math]::Round(($speeds | Measure-Object -Maximum).Maximum, 2)
+      $speedVariation = $maxSpeed - $minSpeed
+      $speedVariationPercent = if ($avgSpeed -gt 0) { [Math]::Round(($speedVariation / $avgSpeed) * 100, 1) } else { 0 }
+      
+      & $WriteLog "  Speed statistics:"
+      & $WriteLog "    Average: ${avgSpeed} Mbps"
+      & $WriteLog "    Minimum: ${minSpeed} Mbps"
+      & $WriteLog "    Maximum: ${maxSpeed} Mbps"
+      & $WriteLog "    Variation: ${speedVariation} Mbps (${speedVariationPercent}%)"
+      
+      # Detect patterns
+      $stableSpeed = $false
+      $rateLimitingDetected = $false
+      $patternType = ""
+      
+      # Check for rate limiting patterns (speed drops to specific values)
+      $speedGroups = $speeds | Group-Object | Sort-Object Count -Descending
+      $mostCommonSpeed = if ($speedGroups.Count -gt 0) { $speedGroups[0] } else { $null }
+      
+      if ($mostCommonSpeed -and $mostCommonSpeed.Count -gt ($speeds.Count * 0.3)) {
+        $commonSpeed = [Math]::Round($mostCommonSpeed.Name, 2)
+        & $WriteLog "  Most common speed: ${commonSpeed} Mbps ($($mostCommonSpeed.Count)/$($speeds.Count) samples)"
+        
+        # Check if this suggests rate limiting
+        if ($mostCommonSpeed.Count -gt ($speeds.Count * 0.5)) {
+          $rateLimitingDetected = $true
+          $patternType = "RATE_LIMITING"
+          & $WriteLog "  *** RATE LIMITING DETECTED: Speed frequently drops to ${commonSpeed} Mbps ***"
+        }
+      }
+      
+      # Check for speed stability
+      if ($speedVariationPercent -lt 10) {
+        $stableSpeed = $true
+        $patternType = "STABLE"
+        & $WriteLog "  Speed consistency: STABLE (${speedVariationPercent}% variation)"
+      } elseif ($speedVariationPercent -lt 30) {
+        $patternType = "MODERATELY_STABLE"
+        & $WriteLog "  Speed consistency: MODERATELY STABLE (${speedVariationPercent}% variation)"
+      } elseif ($speedVariationPercent -lt 60) {
+        $patternType = "UNSTABLE"
+        & $WriteLog "  Speed consistency: UNSTABLE (${speedVariationPercent}% variation)"
+      } else {
+        $patternType = "HIGHLY_VARIABLE"
+        & $WriteLog "  Speed consistency: HIGHLY VARIABLE (${speedVariationPercent}% variation)"
+      }
+      
+      # Check for progressive degradation
+      $firstQuarter = $speeds | Select-Object -First ($speeds.Count / 4)
+      $lastQuarter = $speeds | Select-Object -Last ($speeds.Count / 4)
+      
+      if ($firstQuarter -and $lastQuarter -and $firstQuarter.Count -gt 0 -and $lastQuarter.Count -gt 0) {
+        $firstQuarterAvg = ($firstQuarter | Measure-Object -Average).Average
+        $lastQuarterAvg = ($lastQuarter | Measure-Object -Average).Average
+        
+        if ($lastQuarterAvg -lt ($firstQuarterAvg * 0.7)) {
+          $patternType = "PROGRESSIVE_DEGRADATION"
+          & $WriteLog "  *** PROGRESSIVE DEGRADATION DETECTED ***"
+          & $WriteLog "  First quarter: $([Math]::Round($firstQuarterAvg, 2)) Mbps vs Last quarter: $([Math]::Round($lastQuarterAvg, 2)) Mbps"
+        }
+      }
+      
+      # Time-based analysis
+      $slowSamples = $successfulSamples | Where-Object { $_.DownloadSpeedMbps -lt ($avgSpeed * 0.5) }
+      if ($slowSamples -and $slowSamples.Count -gt 0) {
+        & $WriteLog "  Slow samples (<50% of average): $($slowSamples.Count)/$($successfulSamples.Count)"
+        
+        # Check if slow samples are clustered in time
+        $slowTimes = $slowSamples | ForEach-Object { $_.ElapsedSeconds } | Sort-Object
+        $clusters = 0
+        $currentCluster = 0
+        
+        for ($i = 1; $i -lt $slowTimes.Count; $i++) {
+          if ($slowTimes[$i] - $slowTimes[$i-1] -lt 5) {  # Within 5 seconds
+            $currentCluster++
+          } else {
+            if ($currentCluster -gt 0) { $clusters++ }
+            $currentCluster = 0
+          }
+        }
+        if ($currentCluster -gt 0) { $clusters++ }
+        
+        if ($clusters -gt 0) {
+          & $WriteLog "  Slow periods detected: $clusters separate clusters"
+        }
+      }
+      
+    } else {
+      & $WriteLog "  No valid speed measurements available"
+    }
+  } else {
+    & $WriteLog "  No successful downloads - cannot analyze bandwidth consistency"
+  }
+  
+  # Diagnosis
+  if ($successRate -lt 70) {
+    & $WriteLog "  DIAGNOSIS: Poor download success rate - network connectivity issues"
+    & $WriteLog "  IMPACT: Downloads will frequently fail or timeout"
+    & $WriteLog "  RECOMMENDATION: Check network stability and DNS resolution"
+  } elseif ($rateLimitingDetected) {
+    & $WriteLog "  DIAGNOSIS: ISP rate limiting detected - speeds artificially capped"
+    & $WriteLog "  IMPACT: Streaming quality will be limited by ISP throttling"
+    & $WriteLog "  RECOMMENDATION: Contact ISP about rate limiting or consider different service plan"
+  } elseif ($patternType -eq "PROGRESSIVE_DEGRADATION") {
+    & $WriteLog "  DIAGNOSIS: Progressive bandwidth degradation - hardware or thermal issues"
+    & $WriteLog "  IMPACT: Performance gets worse over time during sustained usage"
+    & $WriteLog "  RECOMMENDATION: Check for overheating, hardware issues, or resource exhaustion"
+  } elseif ($patternType -eq "HIGHLY_VARIABLE") {
+    & $WriteLog "  DIAGNOSIS: Highly variable bandwidth - network instability or interference"
+    & $WriteLog "  IMPACT: Streaming will have quality fluctuations and buffering"
+    & $WriteLog "  RECOMMENDATION: Check for interference, unstable connections, or routing issues"
+  } elseif ($patternType -eq "STABLE") {
+    & $WriteLog "  DIAGNOSIS: Bandwidth is stable and consistent"
+    & $WriteLog "  IMPACT: Bandwidth stability is not causing streaming issues"
+    & $WriteLog "  RECOMMENDATION: Investigate other factors (connection patterns, protocols, etc.)"
+  } else {
+    & $WriteLog "  DIAGNOSIS: Bandwidth performance is acceptable with minor variations"
+    & $WriteLog "  IMPACT: Minor bandwidth variations should not significantly affect streaming"
+    & $WriteLog "  RECOMMENDATION: Monitor for specific usage patterns that cause issues"
+  }
+  
+  return @{
+    TotalSamples = $totalSamples
+    SuccessfulSamples = $successfulSamples.Count
+    SuccessRate = $successRate
+    AverageSpeed = if ($successfulSamples) { [Math]::Round(($successfulSamples | Where-Object { $_.DownloadSpeedMbps } | Measure-Object -Property DownloadSpeedMbps -Average).Average, 2) } else { 0 }
+    MinSpeed = if ($successfulSamples) { [Math]::Round(($successfulSamples | Where-Object { $_.DownloadSpeedMbps } | Measure-Object -Property DownloadSpeedMbps -Minimum).Minimum, 2) } else { 0 }
+    MaxSpeed = if ($successfulSamples) { [Math]::Round(($successfulSamples | Where-Object { $_.DownloadSpeedMbps } | Measure-Object -Property DownloadSpeedMbps -Maximum).Maximum, 2) } else { 0 }
+    SpeedVariation = if ($successfulSamples) { $maxSpeed - $minSpeed } else { 0 }
+    SpeedVariationPercent = if ($successfulSamples -and $avgSpeed -gt 0) { [Math]::Round(($speedVariation / $avgSpeed) * 100, 1) } else { 0 }
+    RateLimitingDetected = $rateLimitingDetected
+    PatternType = $patternType
+    StableSpeed = $stableSpeed
+    Results = $results
+  }
+}
+
+function Test-PortExhaustionDetectionQuick {
+  <#
+  .SYNOPSIS
+  Quick port exhaustion detection for diagnostic workflow
+  .DESCRIPTION
+  Optimized version that tests 50 simultaneous connections in ~15 seconds
+  to detect CGNAT port allocation limits without taking too long.
+  #>
+  param(
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Quick port exhaustion detection (50 connections, ~15 seconds)..."
+  & $WriteLog "This test will detect CGNAT port allocation limits"
+  
+  $testHosts = @(
+    'httpbin.org', 'google.com', 'cloudflare.com', '1.1.1.1', '8.8.8.8'
+  )
+  $connectionCount = 50
+  $connectionTimeout = 8  # seconds
+  
+  $tasks = @()
+  $successCount = 0
+  $timeoutCount = 0
+  $resetCount = 0
+  $refusedCount = 0
+  
+  & $WriteLog "Creating $connectionCount simultaneous connection tasks..."
+  
+  for ($i = 1; $i -le $connectionCount; $i++) {
+    $hostIndex = ($i - 1) % $testHosts.Count
+    $targetHost = $testHosts[$hostIndex]
+    $targetPort = 443
+    
+    $task = [System.Threading.Tasks.Task]::Run({
+      param($targetHost, $targetPort, $timeout)
+      
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = $timeout * 1000
+        $tcpClient.Connect($targetHost, $targetPort)
+        
+        if ($tcpClient.Connected) {
+          $tcpClient.Close()
+          return @{ Status = 'SUCCESS'; Error = $null }
+        } else {
+          return @{ Status = 'FAILED'; Error = 'Connection not established' }
+        }
+      } catch {
+        $errorMsg = $_.Exception.Message
+        if ($errorMsg -like '*timeout*') {
+          return @{ Status = 'TIMEOUT'; Error = $errorMsg }
+        } elseif ($errorMsg -like '*reset*') {
+          return @{ Status = 'RESET'; Error = $errorMsg }
+        } elseif ($errorMsg -like '*refused*') {
+          return @{ Status = 'REFUSED'; Error = $errorMsg }
+        } else {
+          return @{ Status = 'ERROR'; Error = $errorMsg }
+        }
+      }
+    }, $targetHost, $targetPort, $connectionTimeout)
+    
+    $tasks += $task
+  }
+  
+  & $WriteLog "Waiting for $connectionCount connections to complete..."
+  
+  # Wait for all tasks with timeout
+  $allTasks = [System.Threading.Tasks.Task]::WaitAll($tasks, ($connectionTimeout + 5) * 1000)
+  
+  if (-not $allTasks) {
+    & $WriteLog "Warning: Not all tasks completed within timeout"
+  }
+  
+  # Collect results
+  foreach ($task in $tasks) {
+    if ($task.IsCompleted -and $null -ne $task.Result) {
+      $result = $task.Result
+      switch ($result.Status) {
+        'SUCCESS' { $successCount++ }
+        'TIMEOUT' { $timeoutCount++ }
+        'RESET' { $resetCount++ }
+        'REFUSED' { $refusedCount++ }
+        default { }
+      }
+    } else {
+      $timeoutCount++
+    }
+  }
+  
+  # Quick analysis
+  $successRate = [Math]::Round(($successCount / $connectionCount) * 100, 1)
+  $timeoutRate = [Math]::Round(($timeoutCount / $connectionCount) * 100, 1)
+  $resetRate = [Math]::Round(($resetCount / $connectionCount) * 100, 1)
+  $refusedRate = [Math]::Round(($refusedCount / $connectionCount) * 100, 1)
+  
+  & $WriteLog "Quick Port Exhaustion Detection Results:"
+  & $WriteLog "  Total connections: $connectionCount"
+  & $WriteLog "  Successful: $successCount ($successRate%)"
+  & $WriteLog "  Timeouts: $timeoutCount ($timeoutRate%)"
+  & $WriteLog "  Resets: $resetCount ($resetRate%)"
+  & $WriteLog "  Refused: $refusedCount ($refusedRate%)"
+  
+  # Quick diagnosis
+  $diagnosis = ""
+  if ($timeoutRate -gt 60) {
+    $diagnosis = "PORT_EXHAUSTION_LIKELY"
+    & $WriteLog "  *** PORT EXHAUSTION DETECTED: $timeoutRate% timeouts ***"
+    & $WriteLog "  CGNAT may be limiting concurrent connections"
+  } elseif ($resetRate -gt 30) {
+    $diagnosis = "HIGH_RESET_RATE"
+    & $WriteLog "  *** HIGH RESET RATE: $resetRate% connections reset ***"
+    & $WriteLog "  ISP or CGNAT is actively resetting connections"
+  } elseif ($successRate -lt 70) {
+    $diagnosis = "CONNECTION_ISSUES"
+    & $WriteLog "  *** CONNECTION ISSUES: Only $successRate% successful ***"
+  } else {
+    $diagnosis = "PORT_ALLOCATION_OK"
+    & $WriteLog "  Port allocation appears normal"
+  }
+  
+  return @{
+    TotalConnections = $connectionCount
+    SuccessRate = $successRate
+    TimeoutRate = $timeoutRate
+    ResetRate = $resetRate
+    RefusedRate = $refusedRate
+    Diagnosis = $diagnosis
+  }
+}
+
+function Test-BandwidthConsistencyAnalysisQuick {
+  <#
+  .SYNOPSIS
+  Quick bandwidth consistency analysis for diagnostic workflow
+  .DESCRIPTION
+  Optimized version that downloads 5 chunks over 30 seconds to detect
+  rate limiting and throughput stability without taking too long.
+  #>
+  param(
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Quick bandwidth consistency analysis (30 seconds, 5 chunks)..."
+  & $WriteLog "This test will detect rate limiting and throughput stability"
+  
+  $testHost = 'httpbin.org'
+  $testPath = '/bytes/1048576'  # 1MB chunks
+  $chunkCount = 5
+  $chunkInterval = 6  # seconds between chunks
+  
+  $results = @()
+  $totalBytes = 0
+  $totalTime = 0
+  
+  for ($i = 1; $i -le $chunkCount; $i++) {
+    & $WriteLog "Downloading chunk $i/$chunkCount..."
+    
+    $chunkStart = Get-Date
+    try {
+      $webClient = New-Object System.Net.WebClient
+      $webClient.Headers.Add('User-Agent', 'PPPoE-Diagnostic-Tool/1.0')
+      
+      $url = "https://$testHost$testPath"
+      $data = $webClient.DownloadData($url)
+      
+      $chunkEnd = Get-Date
+      $chunkDuration = ($chunkEnd - $chunkStart).TotalSeconds
+      $chunkSize = $data.Length
+      $chunkSpeed = [Math]::Round(($chunkSize / $chunkDuration) / 1024, 2)  # KB/s
+      
+      $results += @{
+        ChunkNumber = $i
+        Duration = [Math]::Round($chunkDuration, 2)
+        Size = $chunkSize
+        SpeedKBps = $chunkSpeed
+        Timestamp = $chunkStart
+      }
+      
+      $totalBytes += $chunkSize
+      $totalTime += $chunkDuration
+      
+      & $WriteLog "  Chunk $i`: $chunkSpeed KB/s ($chunkSize bytes in $([Math]::Round($chunkDuration, 1))s)"
+      
+    } catch {
+      & $WriteLog "  Chunk $i failed: $($_.Exception.Message)"
+      $results += @{
+        ChunkNumber = $i
+        Duration = 0
+        Size = 0
+        SpeedKBps = 0
+        Timestamp = Get-Date
+        Error = $_.Exception.Message
+      }
+    }
+    
+    if ($i -lt $chunkCount) {
+      Start-Sleep -Seconds $chunkInterval
+    }
+  }
+  
+  # Quick analysis
+  $successfulChunks = $results | Where-Object { $_.Size -gt 0 }
+  $avgSpeed = if ($successfulChunks) { [Math]::Round(($successfulChunks | Measure-Object -Property SpeedKBps -Average).Average, 2) } else { 0 }
+  $minSpeed = if ($successfulChunks) { ($successfulChunks | Measure-Object -Property SpeedKBps -Minimum).Minimum } else { 0 }
+  $maxSpeed = if ($successfulChunks) { ($successfulChunks | Measure-Object -Property SpeedKBps -Maximum).Maximum } else { 0 }
+  $speedVariation = if ($avgSpeed -gt 0) { [Math]::Round((($maxSpeed - $minSpeed) / $avgSpeed) * 100, 1) } else { 0 }
+  
+  & $WriteLog "Quick Bandwidth Consistency Analysis Results:"
+  & $WriteLog "  Successful chunks: $($successfulChunks.Count)/$chunkCount"
+  & $WriteLog "  Average speed: $avgSpeed KB/s"
+  & $WriteLog "  Speed range: $minSpeed - $maxSpeed KB/s"
+  & $WriteLog "  Speed variation: $speedVariation%"
+  
+  # Quick diagnosis
+  $diagnosis = ""
+  if ($successfulChunks.Count -lt 3) {
+    $diagnosis = "FREQUENT_FAILURES"
+    & $WriteLog "  *** FREQUENT DOWNLOAD FAILURES DETECTED ***"
+  } elseif ($speedVariation -gt 50) {
+    $diagnosis = "HIGH_SPEED_VARIATION"
+    & $WriteLog "  *** HIGH SPEED VARIATION: $speedVariation% ***"
+    & $WriteLog "  Possible rate limiting or network instability"
+  } elseif ($avgSpeed -lt 100) {
+    $diagnosis = "LOW_BANDWIDTH"
+    & $WriteLog "  *** LOW BANDWIDTH: $avgSpeed KB/s average ***"
+  } else {
+    $diagnosis = "BANDWIDTH_CONSISTENT"
+    & $WriteLog "  Bandwidth appears consistent"
+  }
+  
+  return @{
+    SuccessfulChunks = $successfulChunks.Count
+    AverageSpeedKBps = $avgSpeed
+    MinSpeedKBps = $minSpeed
+    MaxSpeedKBps = $maxSpeed
+    SpeedVariationPercent = $speedVariation
+    Diagnosis = $diagnosis
+    Results = $results
   }
 }
 

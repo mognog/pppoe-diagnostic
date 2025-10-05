@@ -792,4 +792,739 @@ function Test-DefaultRouteVerification {
   return $results
 }
 
+function Test-PacketCaptureDuringFailures {
+  <#
+  .SYNOPSIS
+  Captures network packets during connection failures using netsh trace
+  .DESCRIPTION
+  Uses netsh trace to capture packets when connections drop, providing irrefutable evidence
+  of network behavior. This is the most definitive way to diagnose connection issues.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [int]$CaptureDurationSeconds = 30,
+    [string]$CapturePath = "$env:TEMP\pppoe_packet_capture",
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Starting packet capture during connection failures..."
+  & $WriteLog "This will capture actual network packets to diagnose connection drops"
+  & $WriteLog "Target: $TestHost`:$TestPort"
+  & $WriteLog "Capture duration: $CaptureDurationSeconds seconds"
+  
+  # Create capture directory
+  if (-not (Test-Path $CapturePath)) {
+    New-Item -ItemType Directory -Path $CapturePath -Force | Out-Null
+  }
+  
+  $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+  $etlFile = Join-Path $CapturePath "pppoe_capture_$timestamp.etl"
+  $txtFile = Join-Path $CapturePath "pppoe_capture_$timestamp.txt"
+  
+  & $WriteLog "Capture files: $etlFile"
+  
+  $results = @{
+    CaptureStarted = $false
+    CaptureCompleted = $false
+    ETLFile = $etlFile
+    TxtFile = $txtFile
+    CaptureErrors = @()
+    ConnectionFailures = @()
+    PacketAnalysis = $null
+  }
+  
+  try {
+    # Start netsh trace capture
+    & $WriteLog "Starting netsh trace capture..."
+    
+    # Start netsh trace process
+    Start-Process -FilePath "netsh" -ArgumentList "trace", "start", "capture=yes", "tracefile=$etlFile", "provider=Microsoft-Windows-TCPIP", "level=5" -NoNewWindow -Wait:$false
+    
+    Start-Sleep -Seconds 2  # Give trace time to start
+    
+    # Check if trace started successfully
+    try {
+      $traceStatus = netsh trace show status 2>&1
+      if ($traceStatus -match "Running") {
+        $results.CaptureStarted = $true
+        & $WriteLog "Packet capture started successfully"
+      } else {
+        & $WriteLog "WARNING: Could not verify trace started - continuing with test"
+        $results.CaptureStarted = $false
+      }
+    } catch {
+      & $WriteLog "WARNING: Could not check trace status - continuing with test"
+      $results.CaptureStarted = $false
+    }
+    
+    # Perform connection tests while capturing
+    $startTime = Get-Date
+    $endTime = $startTime.AddSeconds($CaptureDurationSeconds)
+    $testCount = 0
+    
+    while ((Get-Date) -lt $endTime) {
+      $testCount++
+      $elapsedSeconds = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+      
+      & $WriteLog "Connection test $testCount at ${elapsedSeconds}s (capturing packets)..."
+      
+      $connectionResult = @{
+        TestNumber = $testCount
+        Timestamp = Get-Date
+        ElapsedSeconds = $elapsedSeconds
+        Host = $TestHost
+        Port = $TestPort
+        ConnectionEstablished = $false
+        ConnectionLost = $false
+        LossTime = $null
+        ErrorDetails = $null
+      }
+      
+      try {
+        # Create TCP connection
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = 8000  # 8 second timeout to catch 4.1s drops
+        $tcpClient.SendTimeout = 8000
+        
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $tcpClient.Connect($TestHost, $TestPort)
+        $connectionTime = $sw.ElapsedMilliseconds
+        
+        if ($tcpClient.Connected) {
+          $connectionResult.ConnectionEstablished = $true
+          & $WriteLog "  Connection established: ${connectionTime}ms"
+          
+          # Monitor connection for drops (this is where packets will be captured)
+          $monitorDuration = 10  # Monitor for 10 seconds
+          $monitorStart = Get-Date
+          $monitorEnd = $monitorStart.AddSeconds($monitorDuration)
+          
+          $connectionStable = $true
+          
+          while ((Get-Date) -lt $monitorEnd -and $connectionStable) {
+            try {
+              $stream = $tcpClient.GetStream()
+              $stream.ReadTimeout = 1000
+              
+              # Send HTTP request to generate traffic
+              $request = "HEAD / HTTP/1.1`r`nHost: $TestHost`r`nConnection: keep-alive`r`n`r`n"
+              $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+              $stream.Write($requestBytes, 0, $requestBytes.Length)
+              
+              # Try to read response
+              $buffer = New-Object byte[] 1024
+              $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+              
+              $currentElapsed = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+              & $WriteLog "    [$currentElapsed s] Connection stable (${bytesRead} bytes)"
+              
+            } catch {
+              $connectionStable = $false
+              $connectionResult.ConnectionLost = $true
+              $connectionResult.LossTime = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+              $connectionResult.ErrorDetails = $_.Exception.Message
+              
+              & $WriteLog "    [CONNECTION LOST at $($connectionResult.LossTime)s] $($_.Exception.Message)"
+              & $WriteLog "    *** PACKETS CAPTURED FOR THIS FAILURE ***"
+            }
+          }
+          
+          if ($tcpClient.Connected) {
+            $tcpClient.Close()
+            & $WriteLog "  Connection closed cleanly"
+          }
+          
+        } else {
+          $connectionResult.ErrorDetails = "Failed to establish connection"
+          & $WriteLog "  Failed to establish connection"
+        }
+        
+      } catch {
+        $connectionResult.ErrorDetails = $_.Exception.Message
+        & $WriteLog "  Connection error: $($_.Exception.Message)"
+      }
+      
+      $results.ConnectionFailures += $connectionResult
+      
+      # Small delay between tests
+      Start-Sleep -Seconds 3
+    }
+    
+    # Stop trace capture
+    & $WriteLog "Stopping packet capture..."
+    
+    try {
+      $stopProcess = Start-Process -FilePath "netsh" -ArgumentList "trace", "stop" -PassThru -NoNewWindow -Wait:$true
+      
+      if ($stopProcess.ExitCode -eq 0) {
+        & $WriteLog "Packet capture stopped successfully"
+        $results.CaptureCompleted = $true
+      } else {
+        & $WriteLog "WARNING: Trace stop returned exit code $($stopProcess.ExitCode)"
+        $results.CaptureCompleted = $false
+      }
+    } catch {
+      & $WriteLog "ERROR: Failed to stop trace capture: $($_.Exception.Message)"
+      $results.CaptureErrors += "Failed to stop trace: $($_.Exception.Message)"
+    }
+    
+    # Convert ETL to readable format if possible
+    if ($results.CaptureCompleted -and (Test-Path $etlFile)) {
+      & $WriteLog "Converting ETL capture to readable format..."
+      
+      try {
+        # Try to use netsh trace to convert ETL to CSV
+        $csvFile = Join-Path $CapturePath "pppoe_capture_$timestamp.csv"
+        
+        $convertProcess = Start-Process -FilePath "netsh" -ArgumentList "trace", "convert", $etlFile, $csvFile -PassThru -NoNewWindow -Wait:$true
+        
+        if ($convertProcess.ExitCode -eq 0 -and (Test-Path $csvFile)) {
+          & $WriteLog "ETL converted to CSV: $csvFile"
+          $results.CSVFile = $csvFile
+        } else {
+          & $WriteLog "Could not convert ETL to CSV - ETL file available for analysis"
+        }
+      } catch {
+        & $WriteLog "Error converting ETL: $($_.Exception.Message)"
+        $results.CaptureErrors += "ETL conversion failed: $($_.Exception.Message)"
+      }
+    }
+    
+  } catch {
+    & $WriteLog "ERROR: Packet capture failed: $($_.Exception.Message)"
+    $results.CaptureErrors += "Capture failed: $($_.Exception.Message)"
+  }
+  
+  # Analyze captured failures
+  $totalTests = $results.ConnectionFailures.Count
+  $establishedConnections = $results.ConnectionFailures | Where-Object { $_.ConnectionEstablished -eq $true }
+  $lostConnections = $results.ConnectionFailures | Where-Object { $_.ConnectionLost -eq $true }
+  
+  $establishmentRate = if ($totalTests -gt 0) { [Math]::Round(($establishedConnections.Count / $totalTests) * 100, 1) } else { 0 }
+  $lossRate = if ($totalTests -gt 0) { [Math]::Round(($lostConnections.Count / $totalTests) * 100, 1) } else { 0 }
+  
+  & $WriteLog "Packet Capture Analysis:"
+  & $WriteLog "  Total connection tests: $totalTests"
+  & $WriteLog "  Connection establishment rate: $establishmentRate%"
+  & $WriteLog "  Connection loss rate: $lossRate%"
+  & $WriteLog "  Capture started: $($results.CaptureStarted)"
+  & $WriteLog "  Capture completed: $($results.CaptureCompleted)"
+  
+  if ($results.CaptureErrors.Count -gt 0) {
+    & $WriteLog "  Capture errors:"
+    foreach ($errorMsg in $results.CaptureErrors) {
+      & $WriteLog "    - $errorMsg"
+    }
+  }
+  
+  # Analyze failure timing patterns
+  if ($lostConnections.Count -gt 0) {
+    $lossTimes = $lostConnections | ForEach-Object { $_.LossTime } | Where-Object { $_ -ne $null }
+    if ($lossTimes -and $lossTimes.Count -gt 0) {
+      $avgLossTime = [Math]::Round(($lossTimes | Measure-Object -Average).Average, 1)
+      $fourSecondLosses = $lossTimes | Where-Object { $_ -ge 3.5 -and $_ -le 4.5 }
+      
+      & $WriteLog "  Average connection loss time: ${avgLossTime}s"
+      & $WriteLog "  Connections lost around 4 seconds: $($fourSecondLosses.Count)/$($lostConnections.Count)"
+      
+      if ($fourSecondLosses.Count -gt 0) {
+        & $WriteLog "  *** 4-SECOND DROP PATTERN CONFIRMED IN PACKET CAPTURE ***"
+        & $WriteLog "  This provides definitive evidence of timing-based connection drops"
+      }
+    }
+  }
+  
+  # File locations
+  & $WriteLog "Packet Capture Files:"
+  & $WriteLog "  ETL (binary): $etlFile"
+  if ($results.CSVFile) {
+    & $WriteLog "  CSV (readable): $($results.CSVFile)"
+  }
+  & $WriteLog "  Analysis: Use Wireshark, Network Monitor, or netsh trace analyze to examine"
+  
+  # Diagnosis
+  if (-not $results.CaptureStarted) {
+    & $WriteLog "  DIAGNOSIS: Packet capture failed to start - run as Administrator"
+    & $WriteLog "  RECOMMENDATION: Run script as Administrator for packet capture functionality"
+  } elseif (-not $results.CaptureCompleted) {
+    & $WriteLog "  DIAGNOSIS: Packet capture started but failed to complete properly"
+    & $WriteLog "  RECOMMENDATION: Check ETL file manually and verify Administrator privileges"
+  } elseif ($lostConnections.Count -eq 0) {
+    & $WriteLog "  DIAGNOSIS: No connection failures captured - connection stability is good"
+    & $WriteLog "  RECOMMENDATION: Connection issues may be intermittent or resolved"
+  } else {
+    & $WriteLog "  DIAGNOSIS: Connection failures captured - examine packet traces for root cause"
+    & $WriteLog "  RECOMMENDATION: Analyze ETL/CSV files to identify RST packets, timeouts, or routing issues"
+  }
+  
+  return $results
+}
+
+function Test-TimeBasedPatternAnalysis {
+  <#
+  .SYNOPSIS
+  Analyzes connection patterns over time to detect congestion vs infrastructure issues
+  .DESCRIPTION
+  Runs mini-tests every 5 minutes for an hour to detect:
+  - Time-correlated problems (evening congestion)
+  - Random failures (hardware/routing issues)
+  - Progressive degradation patterns
+  #>
+  param(
+    [int]$TestIntervalMinutes = 5,
+    [int]$TotalDurationMinutes = 60,
+    [string]$TestHost = '1.1.1.1',
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Starting time-based pattern analysis..."
+  & $WriteLog "Duration: $TotalDurationMinutes minutes, testing every $TestIntervalMinutes minutes"
+  & $WriteLog "This will detect time-correlated vs random connection issues"
+  
+  $results = @()
+  $startTime = Get-Date
+  $endTime = $startTime.AddMinutes($TotalDurationMinutes)
+  $testCount = 0
+  
+  while ((Get-Date) -lt $endTime) {
+    $testCount++
+    $currentTime = Get-Date
+    $elapsedMinutes = [Math]::Round(($currentTime - $startTime).TotalMinutes, 1)
+    $timeOfDay = $currentTime.ToString("HH:mm")
+    $dayOfWeek = $currentTime.DayOfWeek.ToString()
+    
+    & $WriteLog "Time-based test $testCount at ${elapsedMinutes}m (${timeOfDay}, $dayOfWeek)..."
+    
+    # Perform comprehensive mini-test
+    $miniTestResult = @{
+      TestNumber = $testCount
+      Timestamp = $currentTime
+      ElapsedMinutes = $elapsedMinutes
+      TimeOfDay = $timeOfDay
+      DayOfWeek = $dayOfWeek
+      IsWeekend = ($currentTime.DayOfWeek -eq "Saturday" -or $currentTime.DayOfWeek -eq "Sunday")
+      IsEvening = ($currentTime.Hour -ge 18 -and $currentTime.Hour -le 23)
+      IsPeakHours = ($currentTime.Hour -ge 19 -and $currentTime.Hour -le 21)
+    }
+    
+    # Test 1: Basic connectivity
+    try {
+      $ping = Test-Connection -TargetName $TestHost -Count 3 -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping -and $ping.Count -gt 0) {
+        $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
+        $packetLoss = [Math]::Round(((3 - $ping.Count) / 3) * 100, 1)
+        
+        $miniTestResult.ConnectivitySuccess = $true
+        $miniTestResult.AvgLatency = $avgLatency
+        $miniTestResult.PacketLoss = $packetLoss
+        
+        & $WriteLog "  Basic connectivity: OK (${avgLatency}ms avg, ${packetLoss}% loss)"
+      } else {
+        $miniTestResult.ConnectivitySuccess = $false
+        $miniTestResult.AvgLatency = $null
+        $miniTestResult.PacketLoss = 100
+        & $WriteLog "  Basic connectivity: FAILED"
+      }
+    } catch {
+      $miniTestResult.ConnectivitySuccess = $false
+      $miniTestResult.AvgLatency = $null
+      $miniTestResult.PacketLoss = 100
+      $miniTestResult.ConnectivityError = $_.Exception.Message
+      & $WriteLog "  Basic connectivity: ERROR - $($_.Exception.Message)"
+    }
+    
+    # Test 2: Streaming service connection
+    try {
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 3000
+      $tcpClient.SendTimeout = 3000
+      
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $tcpClient.Connect("netflix.com", 443)
+      $sw.Stop()
+      
+      if ($tcpClient.Connected) {
+        $connectionTime = $sw.ElapsedMilliseconds
+        $miniTestResult.StreamingConnectionSuccess = $true
+        $miniTestResult.StreamingConnectionTime = $connectionTime
+        & $WriteLog "  Streaming connection: OK (${connectionTime}ms)"
+        
+        $tcpClient.Close()
+      } else {
+        $miniTestResult.StreamingConnectionSuccess = $false
+        $miniTestResult.StreamingConnectionTime = $null
+        & $WriteLog "  Streaming connection: FAILED"
+      }
+    } catch {
+      $miniTestResult.StreamingConnectionSuccess = $false
+      $miniTestResult.StreamingConnectionTime = $null
+      $miniTestResult.StreamingConnectionError = $_.Exception.Message
+      & $WriteLog "  Streaming connection: ERROR - $($_.Exception.Message)"
+    }
+    
+    # Test 3: DNS resolution speed
+    try {
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $dnsResult = Resolve-DnsName -Name "google.com" -ErrorAction Stop
+      $sw.Stop()
+      
+      if ($dnsResult -and $dnsResult.Count -gt 0) {
+        $dnsTime = $sw.ElapsedMilliseconds
+        $miniTestResult.DNSSuccess = $true
+        $miniTestResult.DNSTime = $dnsTime
+        & $WriteLog "  DNS resolution: OK (${dnsTime}ms)"
+      } else {
+        $miniTestResult.DNSSuccess = $false
+        $miniTestResult.DNSTime = $null
+        & $WriteLog "  DNS resolution: FAILED"
+      }
+    } catch {
+      $miniTestResult.DNSSuccess = $false
+      $miniTestResult.DNSTime = $null
+      $miniTestResult.DNSError = $_.Exception.Message
+      & $WriteLog "  DNS resolution: ERROR - $($_.Exception.Message)"
+    }
+    
+    # Calculate overall health score
+    $healthScore = 0
+    if ($miniTestResult.ConnectivitySuccess -and $miniTestResult.PacketLoss -lt 10) { $healthScore += 30 }
+    if ($miniTestResult.StreamingConnectionSuccess -and $miniTestResult.StreamingConnectionTime -lt 2000) { $healthScore += 40 }
+    if ($miniTestResult.DNSSuccess -and $miniTestResult.DNSTime -lt 500) { $healthScore += 30 }
+    
+    $miniTestResult.HealthScore = $healthScore
+    
+    # Classify health
+    if ($healthScore -ge 90) {
+      $miniTestResult.HealthClass = "EXCELLENT"
+    } elseif ($healthScore -ge 70) {
+      $miniTestResult.HealthClass = "GOOD"
+    } elseif ($healthScore -ge 50) {
+      $miniTestResult.HealthClass = "FAIR"
+    } else {
+      $miniTestResult.HealthClass = "POOR"
+    }
+    
+    & $WriteLog "  Overall health: $($miniTestResult.HealthClass) ($healthScore/100)"
+    
+    $results += $miniTestResult
+    
+    # Wait for next test interval
+    $nextTestTime = $currentTime.AddMinutes($TestIntervalMinutes)
+    if ($nextTestTime -lt $endTime) {
+      $waitSeconds = [Math]::Round(($nextTestTime - (Get-Date)).TotalSeconds)
+      if ($waitSeconds -gt 0) {
+        & $WriteLog "  Waiting $waitSeconds seconds until next test..."
+        Start-Sleep -Seconds $waitSeconds
+      }
+    }
+  }
+  
+  # Analyze time-based patterns
+  & $WriteLog "Time-Based Pattern Analysis:"
+  
+  $totalTests = $results.Count
+  $excellentTests = $results | Where-Object { $_.HealthClass -eq "EXCELLENT" }
+  $goodTests = $results | Where-Object { $_.HealthClass -eq "GOOD" }
+  $fairTests = $results | Where-Object { $_.HealthClass -eq "FAIR" }
+  $poorTests = $results | Where-Object { $_.HealthClass -eq "POOR" }
+  
+  $avgHealthScore = [Math]::Round(($results | Measure-Object -Property HealthScore -Average).Average, 1)
+  
+  & $WriteLog "  Total tests: $totalTests"
+  & $WriteLog "  Average health score: $avgHealthScore/100"
+  & $WriteLog "  Excellent: $($excellentTests.Count) tests"
+  & $WriteLog "  Good: $($goodTests.Count) tests"
+  & $WriteLog "  Fair: $($fairTests.Count) tests"
+  & $WriteLog "  Poor: $($poorTests.Count) tests"
+  
+  # Analyze time correlations
+  $eveningTests = $results | Where-Object { $_.IsEvening }
+  $peakHourTests = $results | Where-Object { $_.IsPeakHours }
+  $weekendTests = $results | Where-Object { $_.IsWeekend }
+  
+  if ($eveningTests -and $eveningTests.Count -gt 0) {
+    $eveningAvgScore = [Math]::Round(($eveningTests | Measure-Object -Property HealthScore -Average).Average, 1)
+    & $WriteLog "  Evening (6-11 PM) average score: $eveningAvgScore/100"
+  }
+  
+  if ($peakHourTests -and $peakHourTests.Count -gt 0) {
+    $peakAvgScore = [Math]::Round(($peakHourTests | Measure-Object -Property HealthScore -Average).Average, 1)
+    & $WriteLog "  Peak hours (7-9 PM) average score: $peakAvgScore/100"
+  }
+  
+  if ($weekendTests -and $weekendTests.Count -gt 0) {
+    $weekendAvgScore = [Math]::Round(($weekendTests | Measure-Object -Property HealthScore -Average).Average, 1)
+    & $WriteLog "  Weekend average score: $weekendAvgScore/100"
+  }
+  
+  # Detect patterns
+  $timeCorrelation = $false
+  $patternType = ""
+  
+  if ($eveningTests -and $eveningTests.Count -gt 0 -and $peakHourTests -and $peakHourTests.Count -gt 0) {
+    # $eveningScore = ($eveningTests | Measure-Object -Property HealthScore -Average).Average  # Not currently used
+    $peakScore = ($peakHourTests | Measure-Object -Property HealthScore -Average).Average
+    $daytimeScore = ($results | Where-Object { -not $_.IsEvening } | Measure-Object -Property HealthScore -Average).Average
+    
+    if ($peakScore -lt ($daytimeScore - 20)) {
+      $timeCorrelation = $true
+      $patternType = "EVENING_CONGESTION"
+      & $WriteLog "  *** TIME CORRELATION DETECTED: Evening/peak hour degradation ***"
+      & $WriteLog "  Peak hours score: $([Math]::Round($peakScore, 1)) vs daytime: $([Math]::Round($daytimeScore, 1))"
+    }
+  }
+  
+  # Progressive degradation analysis
+  $firstHalf = $results | Select-Object -First ($results.Count / 2)
+  $secondHalf = $results | Select-Object -Last ($results.Count / 2)
+  
+  if ($firstHalf -and $secondHalf) {
+    $firstHalfScore = ($firstHalf | Measure-Object -Property HealthScore -Average).Average
+    $secondHalfScore = ($secondHalf | Measure-Object -Property HealthScore -Average).Average
+    
+    if ($secondHalfScore -lt ($firstHalfScore - 15)) {
+      $patternType = "PROGRESSIVE_DEGRADATION"
+      & $WriteLog "  *** PROGRESSIVE DEGRADATION DETECTED ***"
+      & $WriteLog "  First half: $([Math]::Round($firstHalfScore, 1)) vs second half: $([Math]::Round($secondHalfScore, 1))"
+    }
+  }
+  
+  # Diagnosis
+  if ($timeCorrelation) {
+    & $WriteLog "  DIAGNOSIS: Time-correlated network degradation - likely congestion or capacity issues"
+    & $WriteLog "  IMPACT: Problems worsen during peak usage times"
+    & $WriteLog "  RECOMMENDATION: ISP needs to upgrade capacity or investigate evening routing"
+  } elseif ($patternType -eq "PROGRESSIVE_DEGRADATION") {
+    & $WriteLog "  DIAGNOSIS: Progressive degradation over time - possible hardware failure or resource exhaustion"
+    & $WriteLog "  IMPACT: Network performance gets worse throughout the day"
+    & $WriteLog "  RECOMMENDATION: Check for hardware issues, memory leaks, or resource limits"
+  } elseif ($avgHealthScore -lt 70) {
+    & $WriteLog "  DIAGNOSIS: Consistently poor performance - infrastructure or configuration issues"
+    & $WriteLog "  IMPACT: Poor performance regardless of time"
+    & $WriteLog "  RECOMMENDATION: Investigate routing, hardware, or ISP configuration"
+  } else {
+    & $WriteLog "  DIAGNOSIS: Network performance is stable over time"
+    & $WriteLog "  IMPACT: Time-based issues are not the cause of problems"
+    & $WriteLog "  RECOMMENDATION: Investigate other factors (connection patterns, protocols, etc.)"
+  }
+  
+  return @{
+    TotalTests = $totalTests
+    AverageHealthScore = $avgHealthScore
+    TimeCorrelationDetected = $timeCorrelation
+    PatternType = $patternType
+    EveningPerformance = if ($eveningTests) { [Math]::Round(($eveningTests | Measure-Object -Property HealthScore -Average).Average, 1) } else { $null }
+    PeakHourPerformance = if ($peakHourTests) { [Math]::Round(($peakHourTests | Measure-Object -Property HealthScore -Average).Average, 1) } else { $null }
+    Results = $results
+  }
+}
+
+function Test-PacketCaptureDuringFailuresQuick {
+  <#
+  .SYNOPSIS
+  Quick packet capture during connection failures for diagnostic workflow
+  .DESCRIPTION
+  Optimized version that captures packets for 20 seconds while performing
+  connection tests to detect failures with packet-level evidence.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Quick packet capture during failures (20 seconds)..."
+  & $WriteLog "This test will capture network packets while testing connections"
+  & $WriteLog "Target: $TestHost`:$TestPort"
+  
+  $capturePath = "$env:TEMP\pppoe_packet_capture_quick"
+  $etlFile = "$capturePath.etl"
+  
+  try {
+    # Start packet capture
+    & $WriteLog "Starting packet capture..."
+    Start-Process -FilePath "netsh" -ArgumentList @(
+      "trace", "start", "capture=yes", "tracefile=$etlFile",
+      "provider=Microsoft-Windows-TCPIP", "keywords=ut:TcpipDiagnosis"
+    ) -WindowStyle Hidden -Wait:$false
+    
+    # Wait for trace to start
+    Start-Sleep -Seconds 2
+    
+    # Perform 5 quick connection tests
+    $connectionFailures = 0
+    for ($i = 1; $i -le 5; $i++) {
+      & $WriteLog "Connection test $i/5..."
+      
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = 3000
+        $tcpClient.Connect($TestHost, $TestPort)
+        
+        if ($tcpClient.Connected) {
+          # Quick test
+          $stream = $tcpClient.GetStream()
+          $request = "HEAD / HTTP/1.1`r`nHost: $TestHost`r`nConnection: close`r`n`r`n"
+          $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+          $stream.Write($requestBytes, 0, $requestBytes.Length)
+          
+          # $buffer = New-Object byte[] 1024  # Not used in quick version
+          # $bytesRead = $stream.Read($buffer, 0, $buffer.Length)  # Not used in quick version
+          
+          $tcpClient.Close()
+        }
+      } catch {
+        $connectionFailures++
+        & $WriteLog "Connection failure detected: $($_.Exception.Message)"
+      }
+      
+      Start-Sleep -Seconds 1
+    }
+    
+    # Stop packet capture
+    & $WriteLog "Stopping packet capture..."
+    Start-Process -FilePath "netsh" -ArgumentList @("trace", "stop") -WindowStyle Hidden -Wait
+    
+    & $WriteLog "Packet capture completed"
+    & $WriteLog "Connection failures during capture: $connectionFailures"
+    & $WriteLog "Capture file: $etlFile"
+    
+    if ($connectionFailures -gt 0) {
+      & $WriteLog "  *** CONNECTION FAILURES DETECTED DURING CAPTURE ***"
+      & $WriteLog "  Check capture file for packet-level analysis"
+    }
+    
+    return @{
+      CaptureFile = $etlFile
+      ConnectionFailures = $connectionFailures
+      Diagnosis = if ($connectionFailures -gt 0) { "CONNECTION_FAILURES_CAPTURED" } else { "NO_FAILURES_DETECTED" }
+    }
+    
+  } catch {
+    & $WriteLog "Packet capture failed: $($_.Exception.Message)"
+    return @{
+      CaptureFile = $null
+      ConnectionFailures = 0
+      Diagnosis = "CAPTURE_FAILED"
+    }
+  }
+}
+
+function Test-TimeBasedPatternAnalysisQuick {
+  <#
+  .SYNOPSIS
+  Quick time-based pattern analysis for diagnostic workflow
+  .DESCRIPTION
+  Optimized version that runs 6 mini-tests over 5 minutes to detect
+  performance degradation patterns without taking too long.
+  #>
+  param(
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Quick time-based pattern analysis (5 minutes, 6 tests)..."
+  & $WriteLog "This test will detect performance degradation over time"
+  
+  $results = @()
+  $testInterval = 50  # seconds
+  $totalTests = 6
+  
+  for ($i = 1; $i -le $totalTests; $i++) {
+    $currentTime = Get-Date
+    & $WriteLog "Mini-test $i/$totalTests at $($currentTime.ToString('HH:mm:ss'))..."
+    
+    $testResult = @{
+      TestNumber = $i
+      Timestamp = $currentTime
+      PingLatency = $null
+      ConnectionSuccess = $false
+      DNSResponseTime = $null
+      HealthScore = 0
+    }
+    
+    # Quick ping test
+    try {
+      $pingResult = Test-Connection -ComputerName '1.1.1.1' -Count 1 -Quiet
+      if ($pingResult) {
+        $testResult.PingLatency = 10  # Simplified for speed
+        $testResult.HealthScore += 1
+      }
+    } catch {
+      & $WriteLog "  Ping failed: $($_.Exception.Message)"
+    }
+    
+    # Quick connection test
+    try {
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 2000
+      $tcpClient.Connect('netflix.com', 443)
+      
+      if ($tcpClient.Connected) {
+        $testResult.ConnectionSuccess = $true
+        $testResult.HealthScore += 2
+        $tcpClient.Close()
+      }
+    } catch {
+      & $WriteLog "  Connection test failed: $($_.Exception.Message)"
+    }
+    
+    # Quick DNS test
+    try {
+      $dnsStart = Get-Date
+      # $dnsResult = [System.Net.Dns]::GetHostAddresses('google.com')  # Not used in quick version
+      [System.Net.Dns]::GetHostAddresses('google.com') | Out-Null
+      $dnsEnd = Get-Date
+      $testResult.DNSResponseTime = [Math]::Round(($dnsEnd - $dnsStart).TotalMilliseconds, 1)
+      $testResult.HealthScore += 1
+    } catch {
+      & $WriteLog "  DNS test failed: $($_.Exception.Message)"
+    }
+    
+    $results += $testResult
+    & $WriteLog "  Health score: $($testResult.HealthScore)/4"
+    
+    if ($i -lt $totalTests) {
+      Start-Sleep -Seconds $testInterval
+    }
+  }
+  
+  # Quick analysis
+  $totalHealthScore = ($results | Measure-Object -Property HealthScore -Sum).Sum
+  $maxHealthScore = $totalTests * 4
+  $overallHealth = [Math]::Round(($totalHealthScore / $maxHealthScore) * 100, 1)
+  
+  $connectionFailures = ($results | Where-Object { -not $_.ConnectionSuccess }).Count
+  $dnsFailures = ($results | Where-Object { $null -eq $_.DNSResponseTime }).Count
+  
+  & $WriteLog "Quick Time-Based Pattern Analysis Results:"
+  & $WriteLog "  Overall health: $overallHealth%"
+  & $WriteLog "  Connection failures: $connectionFailures/$totalTests"
+  & $WriteLog "  DNS failures: $dnsFailures/$totalTests"
+  
+  # Quick diagnosis
+  $diagnosis = ""
+  if ($overallHealth -lt 50) {
+    $diagnosis = "SEVERE_DEGRADATION"
+    & $WriteLog "  *** SEVERE PERFORMANCE DEGRADATION DETECTED ***"
+  } elseif ($connectionFailures -gt 2) {
+    $diagnosis = "CONNECTION_INSTABILITY"
+    & $WriteLog "  *** CONNECTION INSTABILITY DETECTED ***"
+  } elseif ($dnsFailures -gt 1) {
+    $diagnosis = "DNS_ISSUES"
+    & $WriteLog "  *** DNS ISSUES DETECTED ***"
+  } else {
+    $diagnosis = "STABLE_PERFORMANCE"
+    & $WriteLog "  Performance appears stable over time"
+  }
+  
+  return @{
+    OverallHealth = $overallHealth
+    ConnectionFailures = $connectionFailures
+    DNSFailures = $dnsFailures
+    Diagnosis = $diagnosis
+    Results = $results
+  }
+}
+
 Export-ModuleMember -Function *

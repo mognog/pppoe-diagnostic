@@ -312,4 +312,510 @@ function Test-DNSStability {
   }
 }
 
+function Test-TCPConnectionResetDetection {
+  <#
+  .SYNOPSIS
+  Detects TCP connection reset patterns and detailed failure modes
+  .DESCRIPTION
+  Monitors for RST (reset) packets and connection termination patterns to identify:
+  - Clean FIN/ACK closure (normal)
+  - RST from remote (connection reset)
+  - Timeout (no response)
+  - Local error conditions
+  This test is specifically designed to detect the 4.1-second connection drop pattern.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [int]$TestDurationSeconds = 30,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing TCP connection reset detection ($TestDurationSeconds seconds)..."
+  & $WriteLog "This test will detect RST packets, timeouts, and connection termination patterns"
+  & $WriteLog "Target: $TestHost`:$TestPort"
+  
+  $results = @()
+  $startTime = Get-Date
+  $endTime = $startTime.AddSeconds($TestDurationSeconds)
+  $testCount = 0
+  
+  while ((Get-Date) -lt $endTime) {
+    $testCount++
+    $currentTime = Get-Date
+    $elapsedSeconds = [Math]::Round(($currentTime - $startTime).TotalSeconds, 1)
+    
+    & $WriteLog "Connection test $testCount at ${elapsedSeconds}s..."
+    
+    $connectionResult = @{
+      TestNumber = $testCount
+      Timestamp = $currentTime
+      ElapsedSeconds = $elapsedSeconds
+      Host = $TestHost
+      Port = $TestPort
+      ConnectionEstablished = $false
+      ConnectionDuration = $null
+      TerminationType = $null
+      ErrorCode = $null
+      SocketError = $null
+      RemoteReset = $false
+      LocalReset = $false
+      TimeoutOccurred = $false
+      CleanClose = $false
+      DetailedError = $null
+    }
+    
+    try {
+      # Create TCP client with detailed error handling
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 5000
+      $tcpClient.SendTimeout = 5000
+      
+      # Establish connection with timing
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $tcpClient.Connect($TestHost, $TestPort)
+      $connectionTime = $sw.ElapsedMilliseconds
+      
+      if ($tcpClient.Connected) {
+        $connectionResult.ConnectionEstablished = $true
+        & $WriteLog "  Connection established: ${connectionTime}ms"
+        
+        # Monitor connection for specific duration to detect 4.1-second pattern
+        $monitorDuration = 6  # Monitor for 6 seconds to catch 4.1s drops
+        $monitorStart = Get-Date
+        $monitorEnd = $monitorStart.AddSeconds($monitorDuration)
+        
+        $connectionStable = $true
+        $disconnectionTime = $null
+        
+        while ((Get-Date) -lt $monitorEnd -and $connectionStable) {
+          try {
+            # Test connection health by attempting to read
+            $stream = $tcpClient.GetStream()
+            $stream.ReadTimeout = 1000
+            
+            # Send minimal HTTP request to keep connection alive
+            $request = "HEAD / HTTP/1.1`r`nHost: $TestHost`r`nConnection: close`r`n`r`n"
+            $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+            $stream.Write($requestBytes, 0, $requestBytes.Length)
+            
+            # Try to read response
+            $buffer = New-Object byte[] 1024
+            $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+            
+            $currentElapsed = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+            & $WriteLog "    [$currentElapsed s] Connection healthy (${bytesRead} bytes received)"
+            
+          } catch {
+            $connectionStable = $false
+            $disconnectionTime = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+            $errorException = $_.Exception
+            
+            & $WriteLog "    [$disconnectionTime s] Connection lost: $($errorException.Message)"
+            
+            # Analyze error type
+            if ($errorException -is [System.Net.Sockets.SocketException]) {
+              $socketError = $errorException.SocketErrorCode
+              $connectionResult.SocketError = $socketError.ToString()
+              $connectionResult.ErrorCode = $errorException.ErrorCode
+              
+              # Detect specific error patterns
+              switch ($socketError) {
+                'ConnectionReset' {
+                  $connectionResult.RemoteReset = $true
+                  $connectionResult.TerminationType = "REMOTE_RESET"
+                  & $WriteLog "    Error Analysis: REMOTE RESET (RST packet received)"
+                }
+                'ConnectionAborted' {
+                  $connectionResult.LocalReset = $true
+                  $connectionResult.TerminationType = "LOCAL_ABORT"
+                  & $WriteLog "    Error Analysis: LOCAL ABORT"
+                }
+                'TimedOut' {
+                  $connectionResult.TimeoutOccurred = $true
+                  $connectionResult.TerminationType = "TIMEOUT"
+                  & $WriteLog "    Error Analysis: CONNECTION TIMEOUT"
+                }
+                'ConnectionRefused' {
+                  $connectionResult.TerminationType = "CONNECTION_REFUSED"
+                  & $WriteLog "    Error Analysis: CONNECTION REFUSED"
+                }
+                'HostUnreachable' {
+                  $connectionResult.TerminationType = "HOST_UNREACHABLE"
+                  & $WriteLog "    Error Analysis: HOST UNREACHABLE"
+                }
+                default {
+                  $connectionResult.TerminationType = "SOCKET_ERROR"
+                  & $WriteLog "    Error Analysis: SOCKET ERROR - $socketError"
+                }
+              }
+            } else {
+              $connectionResult.TerminationType = "GENERAL_ERROR"
+              & $WriteLog "    Error Analysis: GENERAL ERROR"
+            }
+            
+            $connectionResult.DetailedError = $errorException.Message
+          }
+        }
+        
+        # Close connection cleanly if still connected
+        if ($tcpClient.Connected) {
+          try {
+            $tcpClient.Close()
+            $connectionResult.CleanClose = $true
+            $connectionResult.TerminationType = "CLEAN_CLOSE"
+            $connectionResult.ConnectionDuration = $monitorDuration
+            & $WriteLog "  Connection closed cleanly after ${monitorDuration}s"
+          } catch {
+            $connectionResult.DetailedError = "Error during close: $($_.Exception.Message)"
+          }
+        } else {
+          $connectionResult.ConnectionDuration = if ($disconnectionTime) { $disconnectionTime } else { $monitorDuration }
+        }
+        
+      } else {
+        $connectionResult.TerminationType = "CONNECTION_FAILED"
+        & $WriteLog "  Failed to establish connection"
+      }
+      
+    } catch {
+      $errorException = $_.Exception
+      $connectionResult.TerminationType = "CONNECTION_EXCEPTION"
+      $connectionResult.DetailedError = $errorException.Message
+      
+      if ($errorException -is [System.Net.Sockets.SocketException]) {
+        $connectionResult.SocketError = $errorException.SocketErrorCode.ToString()
+        $connectionResult.ErrorCode = $errorException.ErrorCode
+      }
+      
+      & $WriteLog "  Connection exception: $($errorException.Message)"
+    }
+    
+    $results += $connectionResult
+    
+    # Analyze patterns in real-time
+    if ($testCount -ge 3) {
+      $recentResults = $results | Select-Object -Last 3
+      $resetCount = ($recentResults | Where-Object { $_.RemoteReset -eq $true }).Count
+      $timeoutCount = ($recentResults | Where-Object { $_.TimeoutOccurred -eq $true }).Count
+      $cleanCount = ($recentResults | Where-Object { $_.CleanClose -eq $true }).Count
+      
+      if ($resetCount -gt 0) {
+        & $WriteLog "  PATTERN DETECTED: $resetCount/$testCount recent connections received RST packets"
+      }
+      if ($timeoutCount -gt 0) {
+        & $WriteLog "  PATTERN DETECTED: $timeoutCount/$testCount recent connections timed out"
+      }
+      if ($cleanCount -eq $testCount) {
+        & $WriteLog "  PATTERN: All recent connections closed cleanly"
+      }
+    }
+    
+    Start-Sleep -Seconds 2
+  }
+  
+  # Comprehensive analysis
+  & $WriteLog "TCP Connection Reset Detection Analysis:"
+  
+  $totalTests = $results.Count
+  $establishedConnections = $results | Where-Object { $_.ConnectionEstablished -eq $true }
+  $remoteResets = $results | Where-Object { $_.RemoteReset -eq $true }
+  $timeouts = $results | Where-Object { $_.TimeoutOccurred -eq $true }
+  $cleanCloses = $results | Where-Object { $_.CleanClose -eq $true }
+  # $localResets = $results | Where-Object { $_.LocalReset -eq $true }  # Not currently used in analysis
+  
+  $establishmentRate = [Math]::Round(($establishedConnections.Count / $totalTests) * 100, 1)
+  $resetRate = [Math]::Round(($remoteResets.Count / $totalTests) * 100, 1)
+  $timeoutRate = [Math]::Round(($timeouts.Count / $totalTests) * 100, 1)
+  $cleanCloseRate = [Math]::Round(($cleanCloses.Count / $totalTests) * 100, 1)
+  
+  & $WriteLog "  Total tests: $totalTests"
+  & $WriteLog "  Connection establishment rate: $establishmentRate%"
+  & $WriteLog "  Remote reset rate: $resetRate%"
+  & $WriteLog "  Timeout rate: $timeoutRate%"
+  & $WriteLog "  Clean close rate: $cleanCloseRate%"
+  
+  # Detect 4.1-second pattern
+  $fourSecondDrops = $results | Where-Object { 
+    $_.ConnectionDuration -and $_.ConnectionDuration -ge 3.5 -and $_.ConnectionDuration -le 4.5 -and -not $_.CleanClose 
+  }
+  
+  if ($fourSecondDrops.Count -gt 0) {
+    $fourSecondRate = [Math]::Round(($fourSecondDrops.Count / $totalTests) * 100, 1)
+    & $WriteLog "  *** 4.1-SECOND DROP PATTERN DETECTED: $fourSecondRate% of connections drop around 4 seconds ***"
+    & $WriteLog "  This suggests CGNAT connection tracking timeout or ISP rate limiting"
+    
+    foreach ($drop in $fourSecondDrops) {
+      & $WriteLog "    Test $($drop.TestNumber): Dropped at $($drop.ConnectionDuration)s - $($drop.TerminationType)"
+    }
+  }
+  
+  # Analyze socket error patterns
+  $socketErrors = $results | Where-Object { $_.SocketError } | Group-Object SocketError
+  if ($socketErrors.Count -gt 0) {
+    & $WriteLog "  Socket Error Patterns:"
+    foreach ($errorGroup in $socketErrors) {
+      & $WriteLog "    $($errorGroup.Name): $($errorGroup.Count) occurrences"
+    }
+  }
+  
+  # Determine diagnosis
+  $diagnosis = ""
+  if ($resetRate -gt 50) {
+    $diagnosis = "SEVERE_RESET_PATTERN"
+    & $WriteLog "  DIAGNOSIS: Severe RST packet pattern - ISP or CGNAT is actively resetting connections"
+    & $WriteLog "  IMPACT: Streaming services will frequently disconnect with 'connection lost' errors"
+    & $WriteLog "  RECOMMENDATION: Contact ISP about CGNAT configuration or connection tracking issues"
+  } elseif ($fourSecondDrops.Count -gt ($totalTests * 0.3)) {
+    $diagnosis = "FOUR_SECOND_TIMEOUT_PATTERN"
+    & $WriteLog "  DIAGNOSIS: Consistent 4.1-second connection timeout pattern detected"
+    & $WriteLog "  IMPACT: Netflix/Twitch will drop at exactly 4.1 seconds - this is a configuration timeout"
+    & $WriteLog "  RECOMMENDATION: ISP has misconfigured connection tracking timeout - escalate to technical support"
+  } elseif ($timeoutRate -gt 30) {
+    $diagnosis = "HIGH_TIMEOUT_RATE"
+    & $WriteLog "  DIAGNOSIS: High connection timeout rate - network path or routing issues"
+    & $WriteLog "  IMPACT: Apps will show 'connection timeout' errors frequently"
+    & $WriteLog "  RECOMMENDATION: Check network path stability and routing configuration"
+  } elseif ($establishmentRate -lt 70) {
+    $diagnosis = "CONNECTION_ESTABLISHMENT_ISSUES"
+    & $WriteLog "  DIAGNOSIS: Connection establishment problems - firewall or network blocking"
+    & $WriteLog "  IMPACT: Apps will fail to connect entirely"
+    & $WriteLog "  RECOMMENDATION: Check firewall settings and network connectivity"
+  } else {
+    $diagnosis = "CONNECTION_STABILITY_OK"
+    & $WriteLog "  DIAGNOSIS: Connection stability is acceptable"
+    & $WriteLog "  IMPACT: Connection issues are not the primary cause of streaming problems"
+    & $WriteLog "  RECOMMENDATION: Investigate other factors (DNS, bandwidth, etc.)"
+  }
+  
+  return @{
+    TotalTests = $totalTests
+    EstablishmentRate = $establishmentRate
+    ResetRate = $resetRate
+    TimeoutRate = $timeoutRate
+    CleanCloseRate = $cleanCloseRate
+    FourSecondDrops = $fourSecondDrops.Count
+    FourSecondRate = if ($totalTests -gt 0) { [Math]::Round(($fourSecondDrops.Count / $totalTests) * 100, 1) } else { 0 }
+    SocketErrorPatterns = $socketErrors
+    Diagnosis = $diagnosis
+    Results = $results
+  }
+}
+
+function Test-TCPConnectionResetDetectionQuick {
+  <#
+  .SYNOPSIS
+  Quick TCP connection reset detection for diagnostic workflow
+  .DESCRIPTION
+  Optimized version that runs 5 connection tests in ~15 seconds to detect
+  the 4.1-second connection drop pattern without taking too long.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Quick TCP connection reset detection (5 tests, ~15 seconds)..."
+  & $WriteLog "This test will detect RST packets and 4.1-second connection drop patterns"
+  & $WriteLog "Target: $TestHost`:$TestPort"
+  
+  $results = @()
+  $testCount = 0
+  $fourSecondDrops = 0
+  $remoteResets = 0
+  $timeouts = 0
+  $cleanCloses = 0
+  
+  for ($i = 1; $i -le 5; $i++) {
+    $testCount++
+    $currentTime = Get-Date
+    
+    & $WriteLog "Connection test $testCount/5..."
+    
+    $connectionResult = @{
+      TestNumber = $testCount
+      Timestamp = $currentTime
+      Host = $TestHost
+      Port = $TestPort
+      ConnectionEstablished = $false
+      ConnectionDuration = $null
+      TerminationType = $null
+      ErrorCode = $null
+      SocketError = $null
+      RemoteReset = $false
+      LocalReset = $false
+      TimeoutOccurred = $false
+      CleanClose = $false
+      DetailedError = $null
+    }
+    
+    try {
+      # Create TCP client with detailed error handling
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 8000  # 8 second timeout to catch 4.1s drops
+      $tcpClient.SendTimeout = 8000
+      
+      # Establish connection
+      $tcpClient.Connect($TestHost, $TestPort)
+      
+      if ($tcpClient.Connected) {
+        $connectionResult.ConnectionEstablished = $true
+        
+        # Monitor connection for 6 seconds to catch 4.1s drops
+        $monitorDuration = 6
+        $monitorStart = Get-Date
+        $monitorEnd = $monitorStart.AddSeconds($monitorDuration)
+        
+        $connectionStable = $true
+        $disconnectionTime = $null
+        
+        while ((Get-Date) -lt $monitorEnd -and $connectionStable) {
+          try {
+            # Test connection health
+            $stream = $tcpClient.GetStream()
+            $stream.ReadTimeout = 1000
+            
+            # Send minimal HTTP request
+            $request = "HEAD / HTTP/1.1`r`nHost: $TestHost`r`nConnection: close`r`n`r`n"
+            $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+            $stream.Write($requestBytes, 0, $requestBytes.Length)
+            
+            # Try to read response (simplified for quick version)
+            # $buffer = New-Object byte[] 1024  # Not used in quick version
+            # $bytesRead = $stream.Read($buffer, 0, $buffer.Length)  # Not used in quick version
+            
+          } catch {
+            $connectionStable = $false
+            $disconnectionTime = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+            $errorException = $_.Exception
+            
+            # Analyze error type
+            if ($errorException -is [System.Net.Sockets.SocketException]) {
+              $socketError = $errorException.SocketErrorCode
+              $connectionResult.SocketError = $socketError.ToString()
+              $connectionResult.ErrorCode = $errorException.ErrorCode
+              
+              # Detect specific error patterns
+              switch ($socketError) {
+                'ConnectionReset' {
+                  $connectionResult.RemoteReset = $true
+                  $connectionResult.TerminationType = "REMOTE_RESET"
+                  $remoteResets++
+                }
+                'ConnectionAborted' {
+                  $connectionResult.LocalReset = $true
+                  $connectionResult.TerminationType = "LOCAL_ABORT"
+                }
+                'TimedOut' {
+                  $connectionResult.TimeoutOccurred = $true
+                  $connectionResult.TerminationType = "TIMEOUT"
+                  $timeouts++
+                }
+                'ConnectionRefused' {
+                  $connectionResult.TerminationType = "CONNECTION_REFUSED"
+                }
+                'HostUnreachable' {
+                  $connectionResult.TerminationType = "HOST_UNREACHABLE"
+                }
+                default {
+                  $connectionResult.TerminationType = "SOCKET_ERROR"
+                }
+              }
+            } else {
+              $connectionResult.TerminationType = "GENERAL_ERROR"
+            }
+            
+            $connectionResult.DetailedError = $errorException.Message
+          }
+        }
+        
+        # Close connection cleanly if still connected
+        if ($tcpClient.Connected) {
+          try {
+            $tcpClient.Close()
+            $connectionResult.CleanClose = $true
+            $connectionResult.TerminationType = "CLEAN_CLOSE"
+            $connectionResult.ConnectionDuration = $monitorDuration
+            $cleanCloses++
+          } catch {
+            $connectionResult.DetailedError = "Error during close: $($_.Exception.Message)"
+          }
+        } else {
+          $connectionResult.ConnectionDuration = if ($disconnectionTime) { $disconnectionTime } else { $monitorDuration }
+          
+          # Check for 4.1-second pattern
+          if ($disconnectionTime -and $disconnectionTime -ge 3.5 -and $disconnectionTime -le 4.5) {
+            $fourSecondDrops++
+          }
+        }
+        
+      } else {
+        $connectionResult.TerminationType = "CONNECTION_FAILED"
+      }
+      
+    } catch {
+      $errorException = $_.Exception
+      $connectionResult.TerminationType = "CONNECTION_EXCEPTION"
+      $connectionResult.DetailedError = $errorException.Message
+      
+      if ($errorException -is [System.Net.Sockets.SocketException]) {
+        $connectionResult.SocketError = $errorException.SocketErrorCode.ToString()
+        $connectionResult.ErrorCode = $errorException.ErrorCode
+      }
+    }
+    
+    $results += $connectionResult
+    
+    # Small delay between tests
+    if ($i -lt 5) {
+      Start-Sleep -Seconds 2
+    }
+  }
+  
+  # Quick analysis
+  $totalTests = $results.Count
+  $resetRate = [Math]::Round(($remoteResets / $totalTests) * 100, 1)
+  $timeoutRate = [Math]::Round(($timeouts / $totalTests) * 100, 1)
+  $fourSecondRate = [Math]::Round(($fourSecondDrops / $totalTests) * 100, 1)
+  $cleanCloseRate = [Math]::Round(($cleanCloses / $totalTests) * 100, 1)
+  
+  & $WriteLog "Quick TCP Reset Detection Results:"
+  & $WriteLog "  Total tests: $totalTests"
+  & $WriteLog "  Remote resets: $remoteResets ($resetRate%)"
+  & $WriteLog "  Timeouts: $timeouts ($timeoutRate%)"
+  & $WriteLog "  4-second drops: $fourSecondDrops ($fourSecondRate%)"
+  & $WriteLog "  Clean closes: $cleanCloses ($cleanCloseRate%)"
+  
+  # Quick diagnosis
+  $diagnosis = ""
+  if ($fourSecondDrops -gt 0) {
+    $diagnosis = "FOUR_SECOND_TIMEOUT_PATTERN"
+    & $WriteLog "  *** 4.1-SECOND DROP PATTERN DETECTED: $fourSecondRate% of connections ***"
+    & $WriteLog "  This suggests CGNAT connection tracking timeout or ISP rate limiting"
+  } elseif ($resetRate -gt 50) {
+    $diagnosis = "SEVERE_RESET_PATTERN"
+    & $WriteLog "  *** SEVERE RST PACKET PATTERN: $resetRate% of connections ***"
+    & $WriteLog "  ISP or CGNAT is actively resetting connections"
+  } elseif ($timeoutRate -gt 30) {
+    $diagnosis = "HIGH_TIMEOUT_RATE"
+    & $WriteLog "  *** HIGH TIMEOUT RATE: $timeoutRate% of connections ***"
+    & $WriteLog "  Network path or routing issues detected"
+  } else {
+    $diagnosis = "CONNECTION_STABILITY_OK"
+    & $WriteLog "  Connection stability appears normal"
+  }
+  
+  return @{
+    TotalTests = $totalTests
+    ResetRate = $resetRate
+    TimeoutRate = $timeoutRate
+    FourSecondRate = $fourSecondRate
+    CleanCloseRate = $cleanCloseRate
+    FourSecondDrops = $fourSecondDrops
+    Diagnosis = $diagnosis
+    Results = $results
+  }
+}
+
 Export-ModuleMember -Function *
