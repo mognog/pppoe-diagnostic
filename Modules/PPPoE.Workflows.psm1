@@ -329,31 +329,36 @@ function Invoke-EnhancedConnectivityDiagnostics {
     & $WriteLog "Test 1/5: TCP Connection Reset Detection..."
     & $WriteLog "This test will take about 15 seconds to complete"
     $tcpResult = Test-TCPConnectionResetDetectionQuick -TestHost 'netflix.com' -TestPort 443 -WriteLog $WriteLog
-    $Health = Add-Health $Health 'TCP Reset Detection' (if ($tcpResult.FourSecondDrops -gt 0) { 'FAIL (4s drops detected)' } else { 'OK' }) 50
+    $tcpStatus = if ($tcpResult.FourSecondDrops -gt 0) { 'FAIL (4s drops detected)' } else { 'OK' }
+    $Health = Add-Health $Health 'TCP Reset Detection' $tcpStatus 50
     
     # Test 2: Port Exhaustion Detection (15 seconds)
     & $WriteLog "Test 2/5: Port Exhaustion Detection..."
     & $WriteLog "This test will take about 15 seconds to complete"
     $portResult = Test-PortExhaustionDetectionQuick -WriteLog $WriteLog
-    $Health = Add-Health $Health 'Port Exhaustion Test' (if ($portResult.Diagnosis -eq 'PORT_EXHAUSTION_LIKELY') { 'FAIL (port limits detected)' } else { 'OK' }) 51
+    $portStatus = if ($portResult.Diagnosis -eq 'PORT_EXHAUSTION_LIKELY') { 'FAIL (port limits detected)' } else { 'OK' }
+    $Health = Add-Health $Health 'Port Exhaustion Test' $portStatus 51
     
     # Test 3: Bandwidth Consistency Analysis (30 seconds)
     & $WriteLog "Test 3/5: Bandwidth Consistency Analysis..."
     & $WriteLog "This test will take about 30 seconds to complete"
     $bandwidthResult = Test-BandwidthConsistencyAnalysisQuick -WriteLog $WriteLog
-    $Health = Add-Health $Health 'Bandwidth Consistency' (if ($bandwidthResult.Diagnosis -eq 'HIGH_SPEED_VARIATION') { 'FAIL (rate limiting detected)' } else { 'OK' }) 52
+    $bandwidthStatus = if ($bandwidthResult.Diagnosis -eq 'HIGH_SPEED_VARIATION') { 'FAIL (rate limiting detected)' } else { 'OK' }
+    $Health = Add-Health $Health 'Bandwidth Consistency' $bandwidthStatus 52
     
     # Test 4: Packet Capture During Failures (20 seconds)
     & $WriteLog "Test 4/5: Packet Capture During Failures..."
     & $WriteLog "This test will take about 20 seconds to complete"
     $packetResult = Test-PacketCaptureDuringFailuresQuick -TestHost 'netflix.com' -TestPort 443 -WriteLog $WriteLog
-    $Health = Add-Health $Health 'Packet Capture Test' (if ($packetResult.Diagnosis -eq 'CONNECTION_FAILURES_CAPTURED') { 'FAIL (failures captured)' } else { 'OK' }) 53
+    $packetStatus = if ($packetResult.Diagnosis -eq 'CONNECTION_FAILURES_CAPTURED') { 'FAIL (failures captured)' } else { 'OK' }
+    $Health = Add-Health $Health 'Packet Capture Test' $packetStatus 53
     
     # Test 5: Time-Based Pattern Analysis (5 minutes)
     & $WriteLog "Test 5/5: Time-Based Pattern Analysis..."
     & $WriteLog "This test will take about 5 minutes to complete - please wait"
     $timeResult = Test-TimeBasedPatternAnalysisQuick -WriteLog $WriteLog
-    $Health = Add-Health $Health 'Time-Based Patterns' (if ($timeResult.Diagnosis -eq 'SEVERE_DEGRADATION') { 'FAIL (degradation detected)' } else { 'OK' }) 54
+    $timeStatus = if ($timeResult.Diagnosis -eq 'SEVERE_DEGRADATION') { 'FAIL (degradation detected)' } else { 'OK' }
+    $Health = Add-Health $Health 'Time-Based Patterns' $timeStatus 54
     
     # Generate enhanced diagnosis summary
     & $WriteLog ""

@@ -493,8 +493,12 @@ function Test-IPv6FallbackDelay {
         $sw.Restart()
         try {
           $tcpClient = New-Object System.Net.Sockets.TcpClient
-          if ($ipv6Addresses[0].IPAddress) {
-            $tcpClient.Connect($ipv6Addresses[0].IPAddress, 443)
+          $firstAddr = $ipv6Addresses[0]
+          if ($firstAddr -and ($firstAddr.PSObject.Properties['IPAddress'] -and $firstAddr.IPAddress)) {
+            $tcpClient.Connect($firstAddr.IPAddress, 443)
+            $ipv6Success = $tcpClient.Connected
+          } elseif ($firstAddr -is [string]) {
+            $tcpClient.Connect($firstAddr, 443)
             $ipv6Success = $tcpClient.Connected
           } else {
             $ipv6Success = $false
@@ -542,7 +546,7 @@ function Test-IPv6FallbackDelay {
       $results += @{
         Host = $testHost.Name
         Domain = $testHost.Domain
-        IPv6Addresses = if ($ipv6Addresses) { $ipv6Addresses.Count } else { 0 }
+        IPv6Addresses = if ($ipv6Addresses -and ($ipv6Addresses -is [array] -or $ipv6Addresses.PSObject.Properties['Count'])) { $ipv6Addresses.Count } else { 0 }
         IPv6ResolveTime = $ipv6ResolveTime
         IPv6ConnectionTime = $ipv6Time
         IPv6Success = $ipv6Success
@@ -559,6 +563,14 @@ function Test-IPv6FallbackDelay {
       $results += @{
         Host = $testHost.Name
         Domain = $testHost.Domain
+        IPv6Addresses = 0
+        IPv6ResolveTime = 0
+        IPv6ConnectionTime = 0
+        IPv6Success = $false
+        IPv4FallbackTime = 0
+        IPv4Success = $false
+        TotalDelay = 0
+        IPv6Overhead = 0
         Error = $_.Exception.Message
       }
     }
@@ -755,10 +767,11 @@ function Test-ICMPRateLimiting {
   for ($i = 1; $i -le 10; $i++) {
     try {
       $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
-      if ($ping -and $ping.ResponseTime) {
-        $burstResults += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
+      if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
+        $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
+        $burstResults += @{ Packet = $i; Success = $true; Latency = $latency }
         $burstSuccess++
-        & $WriteLog "  Burst ping $i`: SUCCESS (${ping.ResponseTime}ms)"
+        & $WriteLog "  Burst ping $i`: SUCCESS (${latency}ms)"
       } else {
         $burstResults += @{ Packet = $i; Success = $false; Latency = $null }
         & $WriteLog "  Burst ping $i`: FAILED"
@@ -784,10 +797,11 @@ function Test-ICMPRateLimiting {
   for ($i = 1; $i -le 10; $i++) {
     try {
       $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
-      if ($ping -and $ping.ResponseTime) {
-        $sustainedResults += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
+      if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
+        $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
+        $sustainedResults += @{ Packet = $i; Success = $true; Latency = $latency }
         $sustainedSuccess++
-        & $WriteLog "  Sustained ping $i`: SUCCESS (${ping.ResponseTime}ms)"
+        & $WriteLog "  Sustained ping $i`: SUCCESS (${latency}ms)"
       } else {
         $sustainedResults += @{ Packet = $i; Success = $false; Latency = $null }
         & $WriteLog "  Sustained ping $i`: FAILED"
@@ -809,9 +823,10 @@ function Test-ICMPRateLimiting {
   $singleSuccess = $false
   try {
     $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
-    if ($ping -and $ping.ResponseTime) {
+    if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
+      $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
       $singleSuccess = $true
-      & $WriteLog "Single ping: SUCCESS (${ping.ResponseTime}ms)"
+      & $WriteLog "Single ping: SUCCESS (${latency}ms)"
     } else {
       & $WriteLog "Single ping: FAILED"
     }
@@ -928,8 +943,11 @@ function Test-CGNATConnectionCapacity {
   $connectionTasks = @()
   
   foreach ($testHost in $testHosts) {
+    # Capture the current testHost in a local variable for the closure
+    $currentHost = $testHost
+    
     $task = [System.Threading.Tasks.Task]::Run({
-      param($hostInfo, $logCallback)
+      $hostInfo = $currentHost
       
       try {
         $tcpClient = New-Object System.Net.Sockets.TcpClient
@@ -967,7 +985,7 @@ function Test-CGNATConnectionCapacity {
           Error = $_.Exception.Message
         }
       }
-    }, $testHost, $WriteLog)
+    }.GetNewClosure())
     
     $connectionTasks += $task
   }
@@ -1215,14 +1233,14 @@ function Test-DNSServerPerformance {
   & $WriteLog "  Overall average response time: ${overallAvgTime}ms"
   & $WriteLog "  Overall success rate: $overallSuccessRate%"
   
-  if ($bestServer -and $bestServer.DNSServer -and $bestServer.AverageResponseTime) {
-    & $WriteLog "  Best performing server: $($bestServer.DNSServer) (${bestServer.AverageResponseTime}ms avg)"
+  if ($bestServer -and $bestServer.PSObject.Properties['DNSServer'] -and $bestServer.PSObject.Properties['AverageResponseTime']) {
+    & $WriteLog "  Best performing server: $($bestServer.DNSServer) ($($bestServer.AverageResponseTime)ms avg)"
   } else {
     & $WriteLog "  Best performing server: No valid data available"
   }
   
-  if ($worstServer -and $worstServer.DNSServer -and $worstServer.AverageResponseTime) {
-    & $WriteLog "  Worst performing server: $($worstServer.DNSServer) (${worstServer.AverageResponseTime}ms avg)"
+  if ($worstServer -and $worstServer.PSObject.Properties['DNSServer'] -and $worstServer.PSObject.Properties['AverageResponseTime']) {
+    & $WriteLog "  Worst performing server: $($worstServer.DNSServer) ($($worstServer.AverageResponseTime)ms avg)"
   } else {
     & $WriteLog "  Worst performing server: No valid data available"
   }
@@ -1489,9 +1507,9 @@ function Test-LargePacketHandling {
       # Test with specific buffer size
       $ping = Test-Connection -TargetName $testHost -Count 1 -BufferSize $size -TimeoutSeconds 3 -ErrorAction Stop
       
-      if ($ping -and $ping.ResponseTime) {
+      if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
         $success = $true
-        $latency = $ping.ResponseTime
+        $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
         & $WriteLog "  $size bytes: SUCCESS (${latency}ms)"
       } else {
         $errorMessage = "No response received"
@@ -1660,8 +1678,15 @@ function Test-PortExhaustionDetection {
     $testHost = $testHosts[$hostIndex % $testHosts.Count]
     $hostIndex++
     
+    # Capture variables in local scope for closure
+    $currentHost = $testHost
+    $currentNum = $i
+    $currentTimeout = $ConnectionTimeoutSeconds
+    
     $task = [System.Threading.Tasks.Task]::Run({
-      param($hostInfo, $logCallback, $connectionNum, $timeoutSec)
+      $hostInfo = $currentHost
+      $connectionNum = $currentNum
+      $timeoutSec = $currentTimeout
       
       try {
         $tcpClient = New-Object System.Net.Sockets.TcpClient
@@ -1713,7 +1738,7 @@ function Test-PortExhaustionDetection {
           ConnectionTime = $null
         }
       }
-    }, $testHost, $WriteLog, $i, $ConnectionTimeoutSeconds)
+    }.GetNewClosure())
     
     $connectionTasks += $task
   }

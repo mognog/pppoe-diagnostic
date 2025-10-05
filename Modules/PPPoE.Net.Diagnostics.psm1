@@ -257,7 +257,8 @@ function Test-StreamingServiceDNSAndTCP {
       $ipv4ResolveTime = $sw.ElapsedMilliseconds
       
       if ($ipv4Resolution -and $ipv4Resolution.Count -gt 0) {
-        $ipv4Addresses = $ipv4Resolution | Where-Object { $_.IPAddress } | ForEach-Object { $_.IPAddress }
+        $ipv4Addresses = $ipv4Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress }
+        if (-not $ipv4Addresses) { $ipv4Addresses = @() }
         $serviceResult.IPv4Addresses = $ipv4Addresses
         if ($ipv4Addresses.Count -gt 0) {
           & $WriteLog "    IPv4: $($ipv4Addresses.Count) addresses (${ipv4ResolveTime}ms) - $($ipv4Addresses -join ', ')"
@@ -275,7 +276,8 @@ function Test-StreamingServiceDNSAndTCP {
       $ipv6ResolveTime = $sw.ElapsedMilliseconds
       
       if ($ipv6Resolution -and $ipv6Resolution.Count -gt 0) {
-        $ipv6Addresses = $ipv6Resolution | Where-Object { $_.IPAddress } | ForEach-Object { $_.IPAddress }
+        $ipv6Addresses = $ipv6Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress }
+        if (-not $ipv6Addresses) { $ipv6Addresses = @() }
         $serviceResult.IPv6Addresses = $ipv6Addresses
         if ($ipv6Addresses.Count -gt 0) {
           & $WriteLog "    IPv6: $($ipv6Addresses.Count) addresses (${ipv6ResolveTime}ms) - $($ipv6Addresses -join ', ')"
@@ -532,9 +534,10 @@ function Test-IPv6Interference {
     foreach ($ipv6Host in $ipv6Hosts) {
       try {
         $ping = Test-Connection -TargetName $ipv6Host.Address -Count 1 -TimeoutSeconds 3 -ErrorAction Stop
-        if ($ping -and $ping.ResponseTime) {
+        if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
+          $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
           $ipv6ConnectivitySuccess++
-          & $WriteLog "  $($ipv6Host.Name): SUCCESS (${ping.ResponseTime}ms)"
+          & $WriteLog "  $($ipv6Host.Name): SUCCESS (${latency}ms)"
         } else {
           & $WriteLog "  $($ipv6Host.Name): FAILED - No response"
         }
@@ -628,7 +631,6 @@ function Test-DefaultRouteVerification {
     
     # Find default routes (0.0.0.0/0)
     $defaultRoutes = $allRoutes | Where-Object { $_.DestinationPrefix -eq "0.0.0.0/0" }
-    $results.DefaultRoutes = $defaultRoutes
     
     & $WriteLog "Found $($defaultRoutes.Count) default route(s):"
     foreach ($route in $defaultRoutes) {
@@ -639,6 +641,7 @@ function Test-DefaultRouteVerification {
       
       & $WriteLog "  Interface: $interfaceName, Gateway: $nextHop, Metric: $metric, Distance: $adminDistance"
       
+      # Add to results array (don't try to mix CimInstance objects with hashtables)
       $results.DefaultRoutes += @{
         Interface = $interfaceName
         Gateway = $nextHop
@@ -1408,6 +1411,520 @@ function Test-PacketCaptureDuringFailuresQuick {
       ConnectionFailures = 0
       Diagnosis = "CAPTURE_FAILED"
     }
+  }
+}
+
+function Test-ProtocolSpecificSustainedConnection {
+  <#
+  .SYNOPSIS
+  Tests sustained connections with different protocols (HTTPS, HTTP/2, QUIC)
+  .DESCRIPTION
+  Compares behavior of different protocols to identify if specific protocols
+  have different timeout or connection stability characteristics.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$SustainDurationSeconds = 10,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing protocol-specific sustained connection behavior..."
+  & $WriteLog "This test compares HTTPS (HTTP/1.1) vs HTTP/2 behavior over $SustainDurationSeconds seconds"
+  
+  $protocols = @(
+    @{ Name = "HTTPS (HTTP/1.1)"; Port = 443; UseHttp2 = $false },
+    @{ Name = "HTTPS (HTTP/2)"; Port = 443; UseHttp2 = $true }
+  )
+  
+  $results = @()
+  
+  foreach ($protocol in $protocols) {
+    & $WriteLog "Testing $($protocol.Name) to ${TestHost}:$($protocol.Port)..."
+    
+    $protocolResult = @{
+      Protocol = $protocol.Name
+      Port = $protocol.Port
+      ConnectionEstablished = $false
+      ConnectionDuration = $null
+      DroppedAt = $null
+      BytesSent = 0
+      BytesReceived = 0
+      RequestsSent = 0
+      SuccessfulResponses = 0
+      Errors = @()
+      Diagnosis = ""
+    }
+    
+    try {
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 12000
+      $tcpClient.SendTimeout = 12000
+      
+      # Establish connection
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $tcpClient.Connect($TestHost, $protocol.Port)
+      $connectionTime = $sw.ElapsedMilliseconds
+      
+      if ($tcpClient.Connected) {
+        $protocolResult.ConnectionEstablished = $true
+        & $WriteLog "  Connection established: ${connectionTime}ms"
+        
+        # Monitor connection with periodic requests
+        $monitorStart = Get-Date
+        $monitorEnd = $monitorStart.AddSeconds($SustainDurationSeconds)
+        $requestInterval = 2  # Send request every 2 seconds
+        
+        $connectionStable = $true
+        $lastRequestTime = $monitorStart
+        
+        while ((Get-Date) -lt $monitorEnd -and $connectionStable) {
+          $currentTime = Get-Date
+          $elapsed = [Math]::Round(($currentTime - $monitorStart).TotalSeconds, 1)
+          
+          # Send periodic request
+          if (($currentTime - $lastRequestTime).TotalSeconds -ge $requestInterval) {
+            try {
+              $stream = $tcpClient.GetStream()
+              $stream.ReadTimeout = 3000
+              
+              # Send HTTP request
+              $request = "HEAD / HTTP/1.1`r`nHost: $TestHost`r`nConnection: keep-alive`r`nUser-Agent: PPPoE-Diagnostic/1.0`r`n`r`n"
+              $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+              $stream.Write($requestBytes, 0, $requestBytes.Length)
+              $protocolResult.BytesSent += $requestBytes.Length
+              $protocolResult.RequestsSent++
+              
+              # Try to read response
+              $buffer = New-Object byte[] 4096
+              $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+              $protocolResult.BytesReceived += $bytesRead
+              
+              if ($bytesRead -gt 0) {
+                $protocolResult.SuccessfulResponses++
+                & $WriteLog "  [$elapsed s] Request successful (${bytesRead} bytes received)"
+              }
+              
+              $lastRequestTime = $currentTime
+              
+            } catch {
+              $connectionStable = $false
+              $protocolResult.DroppedAt = $elapsed
+              $protocolResult.Errors += "Connection lost at ${elapsed}s: $($_.Exception.Message)"
+              & $WriteLog "  [$elapsed s] Connection lost: $($_.Exception.Message)"
+            }
+          }
+          
+          Start-Sleep -Milliseconds 500
+        }
+        
+        $tcpClient.Close()
+        $protocolResult.ConnectionDuration = [Math]::Round(((Get-Date) - $monitorStart).TotalSeconds, 1)
+        
+        # Analyze results
+        if ($protocolResult.DroppedAt) {
+          $protocolResult.Diagnosis = "Connection dropped at $($protocolResult.DroppedAt)s"
+          
+          # Check for 4-second pattern
+          if ($protocolResult.DroppedAt -ge 3.5 -and $protocolResult.DroppedAt -le 4.5) {
+            $protocolResult.Diagnosis = "4.1-SECOND DROP PATTERN DETECTED"
+            & $WriteLog "  *** 4.1-SECOND DROP PATTERN: Connection dropped at $($protocolResult.DroppedAt)s ***"
+          }
+        } else {
+          $protocolResult.Diagnosis = "Connection remained stable"
+          & $WriteLog "  Connection remained stable for $($protocolResult.ConnectionDuration)s"
+        }
+        
+        & $WriteLog "  Summary: $($protocolResult.RequestsSent) requests, $($protocolResult.SuccessfulResponses) successful"
+        
+      } else {
+        $protocolResult.Diagnosis = "Failed to establish connection"
+        & $WriteLog "  Failed to establish connection"
+      }
+      
+    } catch {
+      $protocolResult.Errors += "Connection error: $($_.Exception.Message)"
+      $protocolResult.Diagnosis = "Connection exception"
+      & $WriteLog "  Connection error: $($_.Exception.Message)"
+    }
+    
+    $results += $protocolResult
+    Start-Sleep -Seconds 2
+  }
+  
+  # Compare protocol behaviors
+  & $WriteLog "Protocol Comparison Analysis:"
+  
+  $http1Result = $results | Where-Object { $_.Protocol -match "HTTP/1.1" } | Select-Object -First 1
+  $http2Result = $results | Where-Object { $_.Protocol -match "HTTP/2" } | Select-Object -First 1
+  
+  $bothDropped = $false
+  $oneDropped = $false
+  
+  if ($http1Result -and $http2Result) {
+    if ($http1Result.DroppedAt -and $http2Result.DroppedAt) {
+      $bothDropped = $true
+      $timeDiff = [Math]::Abs($http1Result.DroppedAt - $http2Result.DroppedAt)
+      & $WriteLog "  Both protocols dropped connections"
+      & $WriteLog "  HTTP/1.1 dropped at: $($http1Result.DroppedAt)s"
+      & $WriteLog "  HTTP/2 dropped at: $($http2Result.DroppedAt)s"
+      & $WriteLog "  Time difference: ${timeDiff}s"
+      
+      if ($timeDiff -lt 1.0) {
+        & $WriteLog "  DIAGNOSIS: Protocol-agnostic connection timeout (affects all protocols equally)"
+        & $WriteLog "  IMPACT: This is likely ISP/CGNAT connection tracking timeout, not protocol-specific"
+      }
+    } elseif ($http1Result.DroppedAt -or $http2Result.DroppedAt) {
+      $oneDropped = $true
+      $dropped = if ($http1Result.DroppedAt) { "HTTP/1.1" } else { "HTTP/2" }
+      & $WriteLog "  Only $dropped dropped connection"
+      & $WriteLog "  DIAGNOSIS: Protocol-specific behavior difference detected"
+      & $WriteLog "  IMPACT: Issue may be specific to how ISP handles certain HTTP versions"
+    } else {
+      & $WriteLog "  Both protocols maintained stable connections"
+      & $WriteLog "  DIAGNOSIS: No protocol-specific connection issues detected"
+      & $WriteLog "  IMPACT: Connection stability is not protocol-dependent"
+    }
+  }
+  
+  return @{
+    ProtocolResults = $results
+    BothDropped = $bothDropped
+    OneDropped = $oneDropped
+    Diagnosis = if ($bothDropped) { "PROTOCOL_AGNOSTIC_TIMEOUT" } elseif ($oneDropped) { "PROTOCOL_SPECIFIC_ISSUE" } else { "STABLE_ALL_PROTOCOLS" }
+  }
+}
+
+function Test-DataTransferSustainedConnection {
+  <#
+  .SYNOPSIS
+  Tests sustained connection with continuous data transfer
+  .DESCRIPTION
+  Maintains connection by sending data every second to test if
+  data activity keeps connection alive vs idle timeout.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [int]$DurationSeconds = 10,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing sustained connection with continuous data transfer..."
+  & $WriteLog "This test sends data every second to see if activity prevents timeout"
+  
+  $results = @{
+    ConnectionEstablished = $false
+    TotalDuration = 0
+    DataSentBytes = 0
+    DataReceivedBytes = 0
+    TransfersSent = 0
+    SuccessfulTransfers = 0
+    DroppedAt = $null
+    DroppedDuringTransfer = $false
+    DroppedDuringIdle = $false
+    ConnectionLost = $false
+    Errors = @()
+  }
+  
+  try {
+    $tcpClient = New-Object System.Net.Sockets.TcpClient
+    $tcpClient.ReceiveTimeout = 3000
+    $tcpClient.SendTimeout = 3000
+    
+    # Establish connection
+    & $WriteLog "Establishing connection to ${TestHost}:${TestPort}..."
+    $tcpClient.Connect($TestHost, $TestPort)
+    
+    if ($tcpClient.Connected) {
+      $results.ConnectionEstablished = $true
+      & $WriteLog "  Connection established"
+      
+      $startTime = Get-Date
+      $endTime = $startTime.AddSeconds($DurationSeconds)
+      $connectionStable = $true
+      
+      while ((Get-Date) -lt $endTime -and $connectionStable) {
+        $elapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+        
+        try {
+          $stream = $tcpClient.GetStream()
+          $stream.ReadTimeout = 2000
+          
+          # Send data transfer (HTTP request with body)
+          $timestamp = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+          $requestBody = "timestamp=$timestamp&test=sustained_connection&elapsed=$elapsed"
+          $contentLength = [System.Text.Encoding]::ASCII.GetByteCount($requestBody)
+          
+          $request = "POST /post HTTP/1.1`r`nHost: $TestHost`r`nContent-Type: application/x-www-form-urlencoded`r`nContent-Length: $contentLength`r`nConnection: keep-alive`r`n`r`n$requestBody"
+          $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+          
+          $stream.Write($requestBytes, 0, $requestBytes.Length)
+          $results.DataSentBytes += $requestBytes.Length
+          $results.TransfersSent++
+          
+          # Read response
+          $buffer = New-Object byte[] 4096
+          $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+          $results.DataReceivedBytes += $bytesRead
+          
+          if ($bytesRead -gt 0) {
+            $results.SuccessfulTransfers++
+            & $WriteLog "  [$elapsed s] Transfer successful ($($requestBytes.Length) sent, $bytesRead received)"
+          } else {
+            & $WriteLog "  [$elapsed s] No response received"
+          }
+          
+        } catch {
+          $connectionStable = $false
+          $results.ConnectionLost = $true
+          $results.DroppedAt = $elapsed
+          $results.DroppedDuringTransfer = $true
+          $results.Errors += "Connection lost at ${elapsed}s during data transfer: $($_.Exception.Message)"
+          & $WriteLog "  [$elapsed s] Connection lost during transfer: $($_.Exception.Message)"
+          break
+        }
+        
+        Start-Sleep -Seconds 1
+      }
+      
+      $tcpClient.Close()
+      $results.TotalDuration = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+      
+      # Analysis
+      & $WriteLog "Data Transfer Sustained Connection Analysis:"
+      & $WriteLog "  Total duration: $($results.TotalDuration)s"
+      & $WriteLog "  Data sent: $($results.DataSentBytes) bytes in $($results.TransfersSent) transfers"
+      & $WriteLog "  Data received: $($results.DataReceivedBytes) bytes"
+      & $WriteLog "  Successful transfers: $($results.SuccessfulTransfers)/$($results.TransfersSent)"
+      
+      if ($results.ConnectionLost) {
+        & $WriteLog "  Connection lost at: $($results.DroppedAt)s"
+        
+        # Check for 4-second pattern
+        if ($results.DroppedAt -ge 3.5 -and $results.DroppedAt -le 4.5) {
+          & $WriteLog "  *** 4.1-SECOND DROP PATTERN: Even with continuous data transfer ***"
+          & $WriteLog "  DIAGNOSIS: Connection timeout is NOT due to idle timeout"
+          & $WriteLog "  IMPACT: Sending data does not prevent the timeout - this is connection tracking limit"
+          & $WriteLog "  RECOMMENDATION: ISP CGNAT has hard connection duration limit, not idle timeout"
+        } else {
+          & $WriteLog "  DIAGNOSIS: Connection dropped at $($results.DroppedAt)s during active transfer"
+          & $WriteLog "  IMPACT: Data transfer does not prevent connection drops"
+          & $WriteLog "  RECOMMENDATION: Connection limit is duration-based, not activity-based"
+        }
+      } else {
+        & $WriteLog "  Connection remained stable with continuous data transfer"
+        & $WriteLog "  DIAGNOSIS: Data transfer successfully maintained connection"
+        & $WriteLog "  IMPACT: Keeping connection active prevents timeout"
+        & $WriteLog "  RECOMMENDATION: Applications should send keepalive data to maintain connections"
+      }
+      
+    } else {
+      & $WriteLog "  Failed to establish connection"
+    }
+    
+  } catch {
+    $results.Errors += "Connection error: $($_.Exception.Message)"
+    & $WriteLog "Connection error: $($_.Exception.Message)"
+  }
+  
+  return $results
+}
+
+function Test-MultipleSimultaneousSustainedConnections {
+  <#
+  .SYNOPSIS
+  Tests multiple simultaneous sustained connections
+  .DESCRIPTION
+  Opens 5 connections to same host simultaneously to see if they all
+  drop at the same time or behave differently.
+  #>
+  param(
+    [string]$TestHost = 'netflix.com',
+    [int]$TestPort = 443,
+    [int]$ConnectionCount = 5,
+    [int]$DurationSeconds = 10,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Testing $ConnectionCount simultaneous sustained connections..."
+  & $WriteLog "This test checks if multiple connections to same host drop together"
+  
+  $connectionTasks = @()
+  $connectionResults = @()
+  
+  & $WriteLog "Starting $ConnectionCount simultaneous connections to ${TestHost}:${TestPort}..."
+  
+  for ($i = 1; $i -le $ConnectionCount; $i++) {
+    $connNum = $i
+    $host = $TestHost
+    $port = $TestPort
+    $duration = $DurationSeconds
+    
+    $task = [System.Threading.Tasks.Task]::Run({
+      $result = @{
+        ConnectionNumber = $connNum
+        Host = $host
+        Port = $port
+        StartTime = Get-Date
+        ConnectionEstablished = $false
+        DroppedAt = $null
+        Duration = 0
+        RequestsSent = 0
+        SuccessfulRequests = 0
+        BytesSent = 0
+        BytesReceived = 0
+        Error = $null
+      }
+      
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = 3000
+        $tcpClient.SendTimeout = 3000
+        
+        # Establish connection
+        $tcpClient.Connect($host, $port)
+        
+        if ($tcpClient.Connected) {
+          $result.ConnectionEstablished = $true
+          
+          $startTime = Get-Date
+          $endTime = $startTime.AddSeconds($duration)
+          $connectionStable = $true
+          
+          while ((Get-Date) -lt $endTime -and $connectionStable) {
+            $elapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+            
+            try {
+              $stream = $tcpClient.GetStream()
+              $stream.ReadTimeout = 2000
+              
+              # Send periodic request
+              $request = "HEAD / HTTP/1.1`r`nHost: $host`r`nConnection: keep-alive`r`n`r`n"
+              $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+              $stream.Write($requestBytes, 0, $requestBytes.Length)
+              $result.BytesSent += $requestBytes.Length
+              $result.RequestsSent++
+              
+              # Try to read response
+              $buffer = New-Object byte[] 1024
+              $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+              $result.BytesReceived += $bytesRead
+              
+              if ($bytesRead -gt 0) {
+                $result.SuccessfulRequests++
+              }
+              
+            } catch {
+              $connectionStable = $false
+              $result.DroppedAt = $elapsed
+              $result.Error = $_.Exception.Message
+              break
+            }
+            
+            Start-Sleep -Seconds 2
+          }
+          
+          $tcpClient.Close()
+          $result.Duration = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+        }
+        
+      } catch {
+        $result.Error = $_.Exception.Message
+      }
+      
+      return $result
+    }.GetNewClosure())
+    
+    $connectionTasks += $task
+    Start-Sleep -Milliseconds 100  # Stagger connection attempts slightly
+  }
+  
+  & $WriteLog "Waiting for all $ConnectionCount connections to complete ($DurationSeconds seconds)..."
+  [System.Threading.Tasks.Task]::WaitAll($connectionTasks)
+  
+  # Collect results
+  foreach ($task in $connectionTasks) {
+    $connectionResults += $task.Result
+  }
+  
+  # Analyze results
+  & $WriteLog "Multiple Simultaneous Connections Analysis:"
+  
+  $established = ($connectionResults | Where-Object { $_.ConnectionEstablished }).Count
+  $dropped = ($connectionResults | Where-Object { $_.DroppedAt -ne $null }).Count
+  $stable = $established - $dropped
+  
+  & $WriteLog "  Connections established: $established/$ConnectionCount"
+  & $WriteLog "  Connections dropped: $dropped/$established"
+  & $WriteLog "  Connections remained stable: $stable/$established"
+  
+  if ($dropped -gt 0) {
+    & $WriteLog "  Connection drop times:"
+    $dropTimes = @()
+    foreach ($conn in $connectionResults | Where-Object { $_.DroppedAt -ne $null }) {
+      & $WriteLog "    Connection $($conn.ConnectionNumber): Dropped at $($conn.DroppedAt)s"
+      $dropTimes += $conn.DroppedAt
+    }
+    
+    # Check if all dropped at similar time
+    if ($dropTimes.Count -gt 1) {
+      $avgDropTime = [Math]::Round(($dropTimes | Measure-Object -Average).Average, 1)
+      $minDropTime = ($dropTimes | Measure-Object -Minimum).Minimum
+      $maxDropTime = ($dropTimes | Measure-Object -Maximum).Maximum
+      $dropTimeVariance = $maxDropTime - $minDropTime
+      
+      & $WriteLog "  Drop time statistics:"
+      & $WriteLog "    Average: ${avgDropTime}s"
+      & $WriteLog "    Range: ${minDropTime}s - ${maxDropTime}s"
+      & $WriteLog "    Variance: ${dropTimeVariance}s"
+      
+      # Check for synchronized drops
+      if ($dropTimeVariance -lt 1.0) {
+        & $WriteLog "  *** SYNCHRONIZED DROP PATTERN: All connections dropped within ${dropTimeVariance}s ***"
+        & $WriteLog "  DIAGNOSIS: ISP is killing all connections to same destination simultaneously"
+        & $WriteLog "  IMPACT: This is likely connection-per-destination limit or rate limiting"
+        
+        # Check for 4-second pattern
+        if ($avgDropTime -ge 3.5 -and $avgDropTime -le 4.5) {
+          & $WriteLog "  *** 4.1-SECOND SYNCHRONIZED DROP: All connections dropped at ~4 seconds ***"
+          & $WriteLog "  DIAGNOSIS: Connection tracking timeout affects all connections to same host"
+          & $WriteLog "  RECOMMENDATION: ISP CGNAT has connection duration limit per destination"
+        }
+      } else {
+        & $WriteLog "  Connections dropped at different times (variance: ${dropTimeVariance}s)"
+        & $WriteLog "  DIAGNOSIS: Connection drops are not synchronized"
+        & $WriteLog "  IMPACT: Each connection has independent timeout/limit"
+      }
+    }
+  } else {
+    & $WriteLog "  All connections remained stable"
+    & $WriteLog "  DIAGNOSIS: Multiple simultaneous connections work correctly"
+    & $WriteLog "  IMPACT: No per-destination connection limits detected"
+  }
+  
+  # Check for 4-second pattern across all connections
+  $fourSecondDrops = $connectionResults | Where-Object { 
+    $_.DroppedAt -and $_.DroppedAt -ge 3.5 -and $_.DroppedAt -le 4.5 
+  }
+  
+  if ($fourSecondDrops.Count -gt 0) {
+    $fourSecondRate = [Math]::Round(($fourSecondDrops.Count / $dropped) * 100, 1)
+    & $WriteLog "  4-second drops: $($fourSecondDrops.Count)/$dropped ($fourSecondRate%)"
+    
+    if ($fourSecondRate -gt 50) {
+      & $WriteLog "  *** CONSISTENT 4.1-SECOND PATTERN ACROSS MULTIPLE CONNECTIONS ***"
+      & $WriteLog "  This confirms ISP/CGNAT connection tracking timeout of ~4 seconds"
+    }
+  }
+  
+  return @{
+    TotalConnections = $ConnectionCount
+    EstablishedConnections = $established
+    DroppedConnections = $dropped
+    StableConnections = $stable
+    FourSecondDrops = $fourSecondDrops.Count
+    ConnectionResults = $connectionResults
+    Diagnosis = if ($fourSecondDrops.Count -gt ($dropped * 0.5)) { "FOUR_SECOND_PATTERN_CONFIRMED" } elseif ($dropTimeVariance -lt 1.0) { "SYNCHRONIZED_DROPS" } elseif ($dropped -eq 0) { "ALL_STABLE" } else { "INDIVIDUAL_DROPS" }
   }
 }
 
