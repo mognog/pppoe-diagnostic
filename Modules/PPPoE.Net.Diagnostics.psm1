@@ -65,7 +65,7 @@ function Show-ONTLEDReminder {
   & $WriteLog "  - LAN not green: Check Ethernet cable connection"
   & $WriteLog ""
   & $WriteLog "Press Enter to continue after checking LEDs..."
-  Read-Host
+  $null = Read-Host
 }
 
 function Get-PPPGatewayInfo {

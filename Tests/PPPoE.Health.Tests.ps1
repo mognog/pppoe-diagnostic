@@ -16,8 +16,15 @@ try {
 $pesterAvailable = $false
 try {
     Import-Module Pester -Force -ErrorAction Stop
-    $pesterAvailable = $true
-    Write-Host "✅ Pester available - using full test framework" -ForegroundColor Green
+    $pesterModule = Get-Module Pester -ErrorAction SilentlyContinue
+    if ($pesterModule -and $pesterModule.Version.Major -ge 5) {
+        $pesterAvailable = $true
+        Write-Host "✅ Pester v$($pesterModule.Version) available - using full test framework" -ForegroundColor Green
+    } else {
+        $pesterAvailable = $false
+        $ver = if ($pesterModule) { $pesterModule.Version } else { '(unknown)' }
+        Write-Host "⚠️  Pester v$ver detected (<5) - using basic validation" -ForegroundColor Yellow
+    }
 } catch {
     Write-Host "⚠️  Pester not available - using basic validation" -ForegroundColor Yellow
 }

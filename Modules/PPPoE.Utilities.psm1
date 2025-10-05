@@ -109,13 +109,17 @@ function Get-ProcessInformation {
   
   $info = @()
   foreach ($process in $processes) {
+    $procPath = $null
+    $procStart = $null
+    try { $procPath = $process.Path } catch { $procPath = $null }
+    try { $procStart = $process.StartTime } catch { $procStart = $null }
     $info += @{
       ProcessName = $process.ProcessName
       Id = $process.Id
       CPU = $process.CPU
       WorkingSet = $process.WorkingSet
-      StartTime = $process.StartTime
-      Path = $process.Path
+      StartTime = $procStart
+      Path = $procPath
     }
   }
   
@@ -264,7 +268,7 @@ function Test-InternetConnectivity {
     }
   }
   
-  return $results
+  return ,$results
 }
 
 function Get-EnvironmentInfo {

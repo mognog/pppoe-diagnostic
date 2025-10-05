@@ -16,7 +16,7 @@ if errorlevel 1 (
 )
 
 echo Running diagnostics...
-pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1" -FullLog
 echo.
 echo Press any key to close...
 pause >nul

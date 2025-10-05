@@ -88,8 +88,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
     }
     
     # Set credentials file path
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $credentialsFile = Join-Path $here "credentials.ps1"
+    $credentialsFile = Join-Path $PSScriptRoot "credentials.ps1"
     
     & $WriteLog ""
     & $WriteLog "=== PPPoE CONNECTION ATTEMPTS ==="
@@ -240,8 +239,7 @@ function Invoke-QuickDiagnosticWorkflow {
   # Quick connectivity test if link is up
   if (-not $linkDown) {
     $connectionNameToUse = if ($pppoeConnections -and $pppoeConnections.Count -gt 0) { $pppoeConnections[0] } else { $PppoeName }
-    $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $credentialsFile = Join-Path $here "credentials.ps1"
+    $credentialsFile = Join-Path $PSScriptRoot "credentials.ps1"
     
     $connectionChecks = Invoke-PPPoEConnectionChecks -Health $Health -ConnectionNameToUse $connectionNameToUse -UserName $UserName -Password $Password -CredentialsFile $credentialsFile -WriteLog $WriteLog
     

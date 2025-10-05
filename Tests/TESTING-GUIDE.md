@@ -338,6 +338,30 @@ See these optimized test files for reference:
 
 ## 🚀 Running Tests
 
+### Pester Version Requirement
+
+- Minimum required: Pester v5.5.0 (or later)
+- Recommended: Latest stable Pester 5.x
+
+Install/upgrade on PowerShell 7 (CurrentUser):
+
+```powershell
+# Ensure NuGet provider and PSGallery are available
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+
+# Install Pester 5 for current user
+Install-Module -Name Pester -Scope CurrentUser -Force -AllowClobber -MinimumVersion 5.5.0
+
+# Verify
+Import-Module Pester -Force
+(Get-Module Pester).Version
+```
+
+If PSGallery is blocked by policy, install on a machine with access and copy the module to:
+- `%USERPROFILE%\Documents\PowerShell\Modules\Pester`
+or add to `$env:PSModulePath`.
+
 ### Run All Tests
 ```powershell
 # From the project root directory
