@@ -16,7 +16,7 @@ function Test-DNSResolution {
     try {
       & $WriteLog "Testing DNS resolution via $($test.Name)..."
       $result = Resolve-DnsName -Name $test.Query -Server $test.Server -ErrorAction Stop
-      if ($result) {
+      if ($result -and $result[0].IPAddress) {
         $ip = $result[0].IPAddress
         & $WriteLog "DNS OK: $($test.Query) -> $ip via $($test.Server)"
         $results += @{ Test = $test.Name; Status = "OK"; Result = "$($test.Query) -> $ip" }
@@ -38,7 +38,7 @@ function Test-PacketLoss {
   for ($i = 1; $i -le $Count; $i++) {
     try {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
-      if ($ping) {
+      if ($ping -and $ping.ResponseTime) {
         $results += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
         & $WriteLog "Packet $($i): OK ($($ping.ResponseTime)ms)"
       }
@@ -151,7 +151,7 @@ function Test-ConnectionStability {
     $elapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
     try {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
-      if ($ping) {
+      if ($ping -and $ping.ResponseTime) {
         $results += @{ Time = $elapsed; Success = $true; Latency = $ping.ResponseTime }
         & $WriteLog "[$($elapsed)s] OK ($($ping.ResponseTime)ms)"
       }
@@ -190,7 +190,7 @@ function Test-ConnectionJitter {
   for ($i = 1; $i -le $Count; $i++) {
     try {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
-      if ($ping) {
+      if ($ping -and $ping.ResponseTime) {
         $results += @{ Packet = $i; Latency = $ping.ResponseTime; Success = $true }
         & $WriteLog "Packet $($i): OK (${ping.ResponseTime}ms)"
       }
@@ -251,10 +251,10 @@ function Test-BurstConnectivity {
     
     for ($i = 1; $i -le $BurstSize; $i++) {
       try {
-        $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
-        if ($ping) {
-          $burstSuccess++
-        }
+      $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
+      if ($ping -and $ping.ResponseTime) {
+        $burstSuccess++
+      }
       } catch {
         # Packet lost
       }
@@ -293,7 +293,7 @@ function Test-QuickConnectivityCheck {
   for ($i = 1; $i -le 5; $i++) {
     try {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
-      if ($ping) {
+      if ($ping -and $ping.ResponseTime) {
         $results += @{ Test = $i; Success = $true; Latency = $ping.ResponseTime }
         & $WriteLog "  Test $($i): OK ($($ping.ResponseTime)ms)"
       }
@@ -453,6 +453,1144 @@ function Test-MultiDestinationRouting {
   }
   
   return $results
+}
+
+function Test-IPv6FallbackDelay {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing IPv6 fallback delay patterns..."
+  & $WriteLog "This test measures time difference between IPv6-first attempts vs IPv4-only connections"
+  
+  $testHosts = @(
+    @{ Name = "Netflix"; Domain = "netflix.com" },
+    @{ Name = "Apple TV"; Domain = "tv.apple.com" },
+    @{ Name = "YouTube"; Domain = "youtube.com" },
+    @{ Name = "Google"; Domain = "google.com" }
+  )
+  
+  $results = @()
+  
+  foreach ($testHost in $testHosts) {
+    & $WriteLog "Testing $($testHost.Name) ($($testHost.Domain))..."
+    
+    # Test IPv6-first resolution and connection
+    $ipv6Time = $null
+    $ipv4FallbackTime = $null
+    $ipv6Success = $false
+    $ipv4Success = $false
+    
+    try {
+      # Get IPv6 addresses first
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $ipv6Addresses = Resolve-DnsName -Name $testHost.Domain -Type AAAA -ErrorAction SilentlyContinue
+      $sw.Stop()
+      $ipv6ResolveTime = $sw.ElapsedMilliseconds
+      
+      if ($ipv6Addresses -and $ipv6Addresses.Count -gt 0) {
+        & $WriteLog "  IPv6 addresses found: $($ipv6Addresses.Count) addresses"
+        
+        # Try to connect to IPv6 address
+        $sw.Restart()
+        try {
+          $tcpClient = New-Object System.Net.Sockets.TcpClient
+          if ($ipv6Addresses[0].IPAddress) {
+            $tcpClient.Connect($ipv6Addresses[0].IPAddress, 443)
+            $ipv6Success = $tcpClient.Connected
+          } else {
+            $ipv6Success = $false
+          }
+          $tcpClient.Close()
+        } catch {
+          $ipv6Success = $false
+        }
+        $sw.Stop()
+        $ipv6Time = $sw.ElapsedMilliseconds
+        
+        if ($ipv6Success) {
+          & $WriteLog "  IPv6 connection: SUCCESS (${ipv6Time}ms)"
+        } else {
+          & $WriteLog "  IPv6 connection: FAILED (${ipv6Time}ms) - will fallback to IPv4"
+        }
+      } else {
+        & $WriteLog "  No IPv6 addresses found - direct IPv4 fallback"
+        $ipv6Time = 0
+      }
+      
+      # Test IPv4-only connection (forced fallback)
+      $sw.Restart()
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.Connect($testHost.Domain, 443)
+        $ipv4Success = $tcpClient.Connected
+        $tcpClient.Close()
+      } catch {
+        $ipv4Success = $false
+      }
+      $sw.Stop()
+      $ipv4FallbackTime = $sw.ElapsedMilliseconds
+      
+      if ($ipv4Success) {
+        & $WriteLog "  IPv4 fallback: SUCCESS (${ipv4FallbackTime}ms)"
+      } else {
+        & $WriteLog "  IPv4 fallback: FAILED (${ipv4FallbackTime}ms)"
+      }
+      
+      # Calculate delay
+      $totalDelay = if ($ipv6Time -gt 0) { $ipv6Time + $ipv4FallbackTime } else { $ipv4FallbackTime }
+      $ipv6Overhead = if ($ipv6Time -gt 0 -and -not $ipv6Success) { $ipv6Time } else { 0 }
+      
+      $results += @{
+        Host = $testHost.Name
+        Domain = $testHost.Domain
+        IPv6Addresses = if ($ipv6Addresses) { $ipv6Addresses.Count } else { 0 }
+        IPv6ResolveTime = $ipv6ResolveTime
+        IPv6ConnectionTime = $ipv6Time
+        IPv6Success = $ipv6Success
+        IPv4FallbackTime = $ipv4FallbackTime
+        IPv4Success = $ipv4Success
+        TotalDelay = $totalDelay
+        IPv6Overhead = $ipv6Overhead
+      }
+      
+      & $WriteLog "  Summary: Total delay ${totalDelay}ms, IPv6 overhead ${ipv6Overhead}ms"
+      
+    } catch {
+      & $WriteLog "  Error testing $($testHost.Name): $($_.Exception.Message)"
+      $results += @{
+        Host = $testHost.Name
+        Domain = $testHost.Domain
+        Error = $_.Exception.Message
+      }
+    }
+    
+    Start-Sleep -Milliseconds 500
+  }
+  
+  # Analyze results
+  $successfulResults = $results | Where-Object { -not $_.Error }
+  $avgDelay = if ($successfulResults -and $successfulResults.Count -gt 0) {
+    [Math]::Round(($successfulResults | Measure-Object -Property TotalDelay -Average).Average, 1)
+  } else { 0 }
+  
+  $avgIPv6Overhead = if ($successfulResults -and $successfulResults.Count -gt 0) {
+    [Math]::Round(($successfulResults | Where-Object { $_.IPv6Overhead -gt 0 } | Measure-Object -Property IPv6Overhead -Average).Average, 1)
+  } else { 0 }
+  
+  $ipv6Failures = if ($successfulResults) { 
+    ($successfulResults | Where-Object { $_.IPv6Overhead -gt 0 }).Count 
+  } else { 0 }
+  
+  & $WriteLog "IPv6 Fallback Analysis:"
+  & $WriteLog "  Average total delay: ${avgDelay}ms"
+  & $WriteLog "  Average IPv6 overhead: ${avgIPv6Overhead}ms"
+  & $WriteLog "  Services with IPv6 failures: $ipv6Failures/$($testHosts.Count)"
+  
+  if ($avgIPv6Overhead -gt 1000) {
+    & $WriteLog "  DIAGNOSIS: Significant IPv6 timeout delays detected - disabling IPv6 may improve performance"
+  } elseif ($avgIPv6Overhead -gt 500) {
+    & $WriteLog "  DIAGNOSIS: Moderate IPv6 timeout delays - consider IPv6 configuration review"
+  } else {
+    & $WriteLog "  DIAGNOSIS: IPv6 fallback performance is acceptable"
+  }
+  
+  return @{
+    AverageDelay = $avgDelay
+    AverageIPv6Overhead = $avgIPv6Overhead
+    IPv6FailureCount = $ipv6Failures
+    TotalServices = $testHosts.Count
+    Results = $results
+    Diagnosis = if ($avgIPv6Overhead -gt 1000) { "SIGNIFICANT_DELAYS" } elseif ($avgIPv6Overhead -gt 500) { "MODERATE_DELAYS" } else { "ACCEPTABLE" }
+  }
+}
+
+function Test-ConnectionEstablishmentSpeed {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing connection establishment speed to streaming services..."
+  & $WriteLog "This test measures how quickly new TCP connections can be established"
+  
+  $streamingServices = @(
+    @{ Name = "Netflix"; Host = "netflix.com"; Port = 443 },
+    @{ Name = "Apple TV"; Host = "tv.apple.com"; Port = 443 },
+    @{ Name = "YouTube"; Host = "youtube.com"; Port = 443 },
+    @{ Name = "Twitch"; Host = "twitch.tv"; Port = 443 },
+    @{ Name = "Disney+"; Host = "disneyplus.com"; Port = 443 }
+  )
+  
+  $results = @()
+  
+  foreach ($service in $streamingServices) {
+    & $WriteLog "Testing $($service.Name) connection speed..."
+    
+    $connectionTimes = @()
+    $successCount = 0
+    $failureCount = 0
+    
+    # Test 5 connection attempts
+    for ($i = 1; $i -le 5; $i++) {
+      try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        
+        # Set a reasonable timeout
+        $tcpClient.ReceiveTimeout = 5000
+        $tcpClient.SendTimeout = 5000
+        
+        $tcpClient.Connect($service.Host, $service.Port)
+        $sw.Stop()
+        
+        if ($tcpClient.Connected) {
+          $connectionTime = $sw.ElapsedMilliseconds
+          $connectionTimes += $connectionTime
+          $successCount++
+          & $WriteLog "  Attempt $i`: SUCCESS (${connectionTime}ms)"
+        } else {
+          $failureCount++
+          & $WriteLog "  Attempt $i`: FAILED (connection not established)"
+        }
+        
+        $tcpClient.Close()
+      } catch {
+        $sw.Stop()
+        $connectionTime = $sw.ElapsedMilliseconds
+        $failureCount++
+        & $WriteLog "  Attempt $i`: FAILED (${connectionTime}ms) - $($_.Exception.Message)"
+      }
+      
+      Start-Sleep -Milliseconds 200
+    }
+    
+    # Calculate statistics
+    $avgTime = if ($connectionTimes.Count -gt 0) {
+      [Math]::Round(($connectionTimes | Measure-Object -Average).Average, 1)
+    } else { 0 }
+    
+    $minTime = if ($connectionTimes.Count -gt 0) {
+      ($connectionTimes | Measure-Object -Minimum).Minimum
+    } else { 0 }
+    
+    $maxTime = if ($connectionTimes.Count -gt 0) {
+      ($connectionTimes | Measure-Object -Maximum).Maximum
+    } else { 0 }
+    
+    $successRate = [Math]::Round(($successCount / 5) * 100, 1)
+    
+    $results += @{
+      Service = $service.Name
+      Host = $service.Host
+      SuccessCount = $successCount
+      FailureCount = $failureCount
+      SuccessRate = $successRate
+      AverageTime = $avgTime
+      MinTime = $minTime
+      MaxTime = $maxTime
+      ConnectionTimes = $connectionTimes
+    }
+    
+    & $WriteLog "  Summary: $successRate% success rate, avg ${avgTime}ms (range: ${minTime}-${maxTime}ms)"
+    
+    # Classify performance
+    if ($successRate -eq 100 -and $avgTime -lt 1000) {
+      & $WriteLog "  Performance: EXCELLENT"
+    } elseif ($successRate -ge 80 -and $avgTime -lt 2000) {
+      & $WriteLog "  Performance: GOOD"
+    } elseif ($successRate -ge 60 -and $avgTime -lt 5000) {
+      & $WriteLog "  Performance: FAIR"
+    } else {
+      & $WriteLog "  Performance: POOR"
+    }
+  }
+  
+  # Overall analysis
+  $overallSuccessRate = [Math]::Round(($results | Measure-Object -Property SuccessRate -Average).Average, 1)
+  $overallAvgTime = [Math]::Round(($results | Where-Object { $_.AverageTime -gt 0 } | Measure-Object -Property AverageTime -Average).Average, 1)
+  $problematicServices = $results | Where-Object { $_.SuccessRate -lt 80 -or $_.AverageTime -gt 3000 }
+  
+  & $WriteLog "Connection Establishment Speed Analysis:"
+  & $WriteLog "  Overall success rate: $overallSuccessRate%"
+  & $WriteLog "  Overall average time: ${overallAvgTime}ms"
+  & $WriteLog "  Problematic services: $($problematicServices.Count)/$($streamingServices.Count)"
+  
+  if ($problematicServices.Count -gt 0) {
+    & $WriteLog "  Services with issues:"
+    foreach ($service in $problematicServices) {
+      & $WriteLog "    - $($service.Service): $($service.SuccessRate)% success, ${service.AverageTime}ms avg"
+    }
+  }
+  
+  # Diagnosis
+  if ($overallSuccessRate -lt 60) {
+    & $WriteLog "  DIAGNOSIS: Major connection establishment issues - investigate network path and ISP"
+  } elseif ($overallAvgTime -gt 3000) {
+    & $WriteLog "  DIAGNOSIS: Slow connection establishment - may cause app timeouts"
+  } elseif ($problematicServices.Count -gt 0) {
+    & $WriteLog "  DIAGNOSIS: Some services have connection issues - check service-specific routing"
+  } else {
+    & $WriteLog "  DIAGNOSIS: Connection establishment performance is good"
+  }
+  
+  return @{
+    OverallSuccessRate = $overallSuccessRate
+    OverallAverageTime = $overallAvgTime
+    ProblematicServices = $problematicServices.Count
+    TotalServices = $streamingServices.Count
+    Results = $results
+    Diagnosis = if ($overallSuccessRate -lt 60) { "MAJOR_ISSUES" } elseif ($overallAvgTime -gt 3000) { "SLOW_CONNECTIONS" } elseif ($problematicServices.Count -gt 0) { "SOME_ISSUES" } else { "GOOD" }
+  }
+}
+
+function Test-ICMPRateLimiting {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing ICMP rate limiting patterns..."
+  & $WriteLog "This test compares burst vs sustained ICMP packet success rates"
+  
+  $testIP = '1.1.1.1'
+  
+  # Test 1: Burst ICMP (rapid fire)
+  & $WriteLog "Test 1: Burst ICMP test (10 rapid pings)..."
+  $burstResults = @()
+  $burstSuccess = 0
+  
+  for ($i = 1; $i -le 10; $i++) {
+    try {
+      $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 1 -ErrorAction Stop
+      if ($ping -and $ping.ResponseTime) {
+        $burstResults += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
+        $burstSuccess++
+        & $WriteLog "  Burst ping $i`: SUCCESS (${ping.ResponseTime}ms)"
+      } else {
+        $burstResults += @{ Packet = $i; Success = $false; Latency = $null }
+        & $WriteLog "  Burst ping $i`: FAILED"
+      }
+    } catch {
+      $burstResults += @{ Packet = $i; Success = $false; Latency = $null }
+      & $WriteLog "  Burst ping $i`: FAILED - $($_.Exception.Message)"
+    }
+    Start-Sleep -Milliseconds 50  # Very short delay for burst test
+  }
+  
+  $burstSuccessRate = [Math]::Round(($burstSuccess / 10) * 100, 1)
+  & $WriteLog "Burst test result: $burstSuccessRate% success rate"
+  
+  # Wait between tests to avoid interference
+  Start-Sleep -Seconds 2
+  
+  # Test 2: Sustained ICMP (spaced out)
+  & $WriteLog "Test 2: Sustained ICMP test (10 pings with 1-second intervals)..."
+  $sustainedResults = @()
+  $sustainedSuccess = 0
+  
+  for ($i = 1; $i -le 10; $i++) {
+    try {
+      $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
+      if ($ping -and $ping.ResponseTime) {
+        $sustainedResults += @{ Packet = $i; Success = $true; Latency = $ping.ResponseTime }
+        $sustainedSuccess++
+        & $WriteLog "  Sustained ping $i`: SUCCESS (${ping.ResponseTime}ms)"
+      } else {
+        $sustainedResults += @{ Packet = $i; Success = $false; Latency = $null }
+        & $WriteLog "  Sustained ping $i`: FAILED"
+      }
+    } catch {
+      $sustainedResults += @{ Packet = $i; Success = $false; Latency = $null }
+      & $WriteLog "  Sustained ping $i`: FAILED - $($_.Exception.Message)"
+    }
+    Start-Sleep -Seconds 1  # 1-second delay for sustained test
+  }
+  
+  $sustainedSuccessRate = [Math]::Round(($sustainedSuccess / 10) * 100, 1)
+  & $WriteLog "Sustained test result: $sustainedSuccessRate% success rate"
+  
+  # Test 3: Single ICMP after delay
+  & $WriteLog "Test 3: Single ICMP test after 5-second delay..."
+  Start-Sleep -Seconds 5
+  
+  $singleSuccess = $false
+  try {
+    $ping = Test-Connection -TargetName $testIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
+    if ($ping -and $ping.ResponseTime) {
+      $singleSuccess = $true
+      & $WriteLog "Single ping: SUCCESS (${ping.ResponseTime}ms)"
+    } else {
+      & $WriteLog "Single ping: FAILED"
+    }
+  } catch {
+    & $WriteLog "Single ping: FAILED - $($_.Exception.Message)"
+  }
+  
+  # Analyze patterns
+  $rateLimitingDetected = $false
+  $rateLimitPattern = ""
+  
+  if ($burstSuccessRate -lt $sustainedSuccessRate -and $sustainedSuccessRate -gt 50) {
+    $rateLimitingDetected = $true
+    $rateLimitPattern = "Burst packets are being rate-limited"
+    & $WriteLog "RATE LIMITING DETECTED: Burst packets ($burstSuccessRate%) perform worse than sustained ($sustainedSuccessRate%)"
+  } elseif ($burstSuccessRate -eq 0 -and $sustainedSuccessRate -gt 0) {
+    $rateLimitingDetected = $true
+    $rateLimitPattern = "Severe burst rate limiting detected"
+    & $WriteLog "SEVERE RATE LIMITING: All burst packets failed, but sustained packets succeeded"
+  } elseif ($burstSuccessRate -gt $sustainedSuccessRate) {
+    $rateLimitPattern = "No rate limiting detected - burst performs better"
+    & $WriteLog "NO RATE LIMITING: Burst packets ($burstSuccessRate%) perform better than sustained ($sustainedSuccessRate%)"
+  } else {
+    $rateLimitPattern = "Inconclusive - similar performance patterns"
+    & $WriteLog "INCONCLUSIVE: Similar performance between burst ($burstSuccessRate%) and sustained ($sustainedSuccessRate%)"
+  }
+  
+  # Calculate latency differences
+  $burstLatencies = $burstResults | Where-Object { $_.Success } | ForEach-Object { $_.Latency }
+  $sustainedLatencies = $sustainedResults | Where-Object { $_.Success } | ForEach-Object { $_.Latency }
+  
+  $burstAvgLatency = if ($burstLatencies.Count -gt 0) {
+    [Math]::Round(($burstLatencies | Measure-Object -Average).Average, 1)
+  } else { 0 }
+  
+  $sustainedAvgLatency = if ($sustainedLatencies.Count -gt 0) {
+    [Math]::Round(($sustainedLatencies | Measure-Object -Average).Average, 1)
+  } else { 0 }
+  
+  & $WriteLog "ICMP Rate Limiting Analysis:"
+  & $WriteLog "  Burst success rate: $burstSuccessRate% (avg latency: ${burstAvgLatency}ms)"
+  & $WriteLog "  Sustained success rate: $sustainedSuccessRate% (avg latency: ${sustainedAvgLatency}ms)"
+  & $WriteLog "  Single ping success: $(if ($singleSuccess) { 'YES' } else { 'NO' })"
+  & $WriteLog "  Rate limiting detected: $(if ($rateLimitingDetected) { 'YES' } else { 'NO' })"
+  
+  # Diagnosis and recommendations
+  if ($rateLimitingDetected) {
+    if ($singleSuccess) {
+      & $WriteLog "  DIAGNOSIS: ISP is rate-limiting ICMP burst traffic but allows individual packets"
+      & $WriteLog "  IMPACT: Path MTU Discovery may fail during high-traffic periods"
+      & $WriteLog "  RECOMMENDATION: Monitor for MTU-related issues during streaming"
+    } else {
+      & $WriteLog "  DIAGNOSIS: ISP is blocking or severely rate-limiting ICMP traffic"
+      & $WriteLog "  IMPACT: Path MTU Discovery and some diagnostic tools will not work"
+      & $WriteLog "  RECOMMENDATION: Use TCP-based diagnostics instead of ping tests"
+    }
+  } else {
+    & $WriteLog "  DIAGNOSIS: ICMP traffic is not being rate-limited by ISP"
+    & $WriteLog "  IMPACT: Normal ICMP functionality available"
+    & $WriteLog "  RECOMMENDATION: ICMP-based diagnostics should work normally"
+  }
+  
+  return @{
+    RateLimitingDetected = $rateLimitingDetected
+    BurstSuccessRate = $burstSuccessRate
+    SustainedSuccessRate = $sustainedSuccessRate
+    SinglePingSuccess = $singleSuccess
+    BurstAvgLatency = $burstAvgLatency
+    SustainedAvgLatency = $sustainedAvgLatency
+    RateLimitPattern = $rateLimitPattern
+    BurstResults = $burstResults
+    SustainedResults = $sustainedResults
+    Diagnosis = if ($rateLimitingDetected) { if ($singleSuccess) { "BURST_RATE_LIMITED" } else { "SEVERELY_RATE_LIMITED" } } else { "NO_RATE_LIMITING" }
+  }
+}
+
+function Test-CGNATConnectionCapacity {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing CGNAT connection capacity..."
+  & $WriteLog "This test opens 20 simultaneous connections to different hosts to detect CGNAT limits"
+  
+  # Test hosts with different IP ranges to test CGNAT connection limits
+  $testHosts = @(
+    @{ Name = "Google DNS"; Host = "8.8.8.8"; Port = 53 },
+    @{ Name = "Cloudflare DNS"; Host = "1.1.1.1"; Port = 53 },
+    @{ Name = "Quad9 DNS"; Host = "9.9.9.9"; Port = 53 },
+    @{ Name = "OpenDNS"; Host = "208.67.222.222"; Port = 53 },
+    @{ Name = "Google HTTPS"; Host = "google.com"; Port = 443 },
+    @{ Name = "Cloudflare HTTPS"; Host = "cloudflare.com"; Port = 443 },
+    @{ Name = "GitHub"; Host = "github.com"; Port = 443 },
+    @{ Name = "StackOverflow"; Host = "stackoverflow.com"; Port = 443 },
+    @{ Name = "Reddit"; Host = "reddit.com"; Port = 443 },
+    @{ Name = "Wikipedia"; Host = "wikipedia.org"; Port = 443 },
+    @{ Name = "Netflix"; Host = "netflix.com"; Port = 443 },
+    @{ Name = "YouTube"; Host = "youtube.com"; Port = 443 },
+    @{ Name = "Apple"; Host = "apple.com"; Port = 443 },
+    @{ Name = "Microsoft"; Host = "microsoft.com"; Port = 443 },
+    @{ Name = "Amazon"; Host = "amazon.com"; Port = 443 },
+    @{ Name = "Facebook"; Host = "facebook.com"; Port = 443 },
+    @{ Name = "Twitter"; Host = "twitter.com"; Port = 443 },
+    @{ Name = "LinkedIn"; Host = "linkedin.com"; Port = 443 },
+    @{ Name = "Instagram"; Host = "instagram.com"; Port = 443 },
+    @{ Name = "Spotify"; Host = "spotify.com"; Port = 443 }
+  )
+  
+  $results = @()
+  $successfulConnections = @()
+  $failedConnections = @()
+  
+  & $WriteLog "Attempting to establish $($testHosts.Count) simultaneous connections..."
+  
+  # Create all connection attempts simultaneously
+  $connectionTasks = @()
+  
+  foreach ($testHost in $testHosts) {
+    $task = [System.Threading.Tasks.Task]::Run({
+      param($hostInfo, $logCallback)
+      
+      try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = 5000
+        $tcpClient.SendTimeout = 5000
+        
+        # Attempt connection with timeout
+        $connectTask = $tcpClient.ConnectAsync($hostInfo.Host, $hostInfo.Port)
+        $timeoutTask = [System.Threading.Tasks.Task]::Delay(5000)
+        
+        $completedTask = [System.Threading.Tasks.Task]::WaitAny($connectTask, $timeoutTask)
+        
+        if ($completedTask -eq 0 -and $tcpClient.Connected) {
+          $tcpClient.Close()
+          return @{
+            Host = $hostInfo.Name
+            Target = "$($hostInfo.Host):$($hostInfo.Port)"
+            Success = $true
+            Error = $null
+          }
+        } else {
+          $tcpClient.Close()
+          return @{
+            Host = $hostInfo.Name
+            Target = "$($hostInfo.Host):$($hostInfo.Port)"
+            Success = $false
+            Error = if ($completedTask -eq 1) { "Connection timeout" } else { "Connection failed" }
+          }
+        }
+      } catch {
+        return @{
+          Host = $hostInfo.Name
+          Target = "$($hostInfo.Host):$($hostInfo.Port)"
+          Success = $false
+          Error = $_.Exception.Message
+        }
+      }
+    }, $testHost, $WriteLog)
+    
+    $connectionTasks += $task
+  }
+  
+  # Wait for all connections to complete
+  & $WriteLog "Waiting for all connection attempts to complete..."
+  [System.Threading.Tasks.Task]::WaitAll($connectionTasks)
+  
+  # Collect results
+  foreach ($task in $connectionTasks) {
+    $result = $task.Result
+    $results += $result
+    
+    if ($result.Success) {
+      $successfulConnections += $result
+      & $WriteLog "  ✓ $($result.Host): SUCCESS"
+    } else {
+      $failedConnections += $result
+      & $WriteLog "  ✗ $($result.Host): FAILED - $($result.Error)"
+    }
+  }
+  
+  # Analyze results
+  $totalConnections = $testHosts.Count
+  $successCount = $successfulConnections.Count
+  $failureCount = $failedConnections.Count
+  $successRate = [Math]::Round(($successCount / $totalConnections) * 100, 1)
+  
+  & $WriteLog "CGNAT Connection Capacity Analysis:"
+  & $WriteLog "  Total connections attempted: $totalConnections"
+  & $WriteLog "  Successful connections: $successCount"
+  & $WriteLog "  Failed connections: $failureCount"
+  & $WriteLog "  Success rate: $successRate%"
+  
+  # Analyze failure patterns
+  $timeoutFailures = ($failedConnections | Where-Object { $_.Error -eq "Connection timeout" }).Count
+  $connectionFailures = ($failedConnections | Where-Object { $_.Error -ne "Connection timeout" }).Count
+  
+  & $WriteLog "  Timeout failures: $timeoutFailures"
+  & $WriteLog "  Connection failures: $connectionFailures"
+  
+  # Determine if CGNAT limits are being hit
+  $cgnatLimitsDetected = $false
+  $cgnatPattern = ""
+  
+  if ($successRate -lt 50) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "Severe connection capacity limits detected"
+    & $WriteLog "  SEVERE CGNAT LIMITS: Less than 50% of connections succeeded"
+  } elseif ($successRate -lt 80 -and $timeoutFailures -gt $connectionFailures) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "Moderate CGNAT connection limits with timeout pattern"
+    & $WriteLog "  MODERATE CGNAT LIMITS: Timeout failures exceed connection failures"
+  } elseif ($timeoutFailures -gt 0 -and $timeoutFailures -gt ($totalConnections * 0.3)) {
+    $cgnatLimitsDetected = $true
+    $cgnatPattern = "CGNAT timeout pattern detected"
+    & $WriteLog "  CGNAT TIMEOUT PATTERN: High number of timeout failures detected"
+  } else {
+    $cgnatPattern = "No CGNAT connection limits detected"
+    & $WriteLog "  NO CGNAT LIMITS: Connection capacity appears normal"
+  }
+  
+  # Diagnosis and recommendations
+  if ($cgnatLimitsDetected) {
+    if ($successRate -lt 50) {
+      & $WriteLog "  DIAGNOSIS: CGNAT has severe connection limits - may explain multi-stream failures"
+      & $WriteLog "  IMPACT: Simultaneous connections to multiple services will fail"
+      & $WriteLog "  RECOMMENDATION: Contact ISP about CGNAT connection limits or request static IP"
+    } elseif ($timeoutFailures -gt $connectionFailures) {
+      & $WriteLog "  DIAGNOSIS: CGNAT timeout issues - connections fail due to timeouts"
+      & $WriteLog "  IMPACT: Apps may show 'something went wrong' errors during peak usage"
+      & $WriteLog "  RECOMMENDATION: Monitor connection patterns and consider connection pooling"
+    } else {
+      & $WriteLog "  DIAGNOSIS: Some CGNAT connection issues detected"
+      & $WriteLog "  IMPACT: Occasional multi-stream service failures"
+      & $WriteLog "  RECOMMENDATION: Monitor and document specific failure patterns"
+    }
+  } else {
+    & $WriteLog "  DIAGNOSIS: CGNAT connection capacity is adequate"
+    & $WriteLog "  IMPACT: No CGNAT-related connection issues expected"
+    & $WriteLog "  RECOMMENDATION: CGNAT is not the cause of connection issues"
+  }
+  
+  return @{
+    TotalConnections = $totalConnections
+    SuccessfulConnections = $successCount
+    FailedConnections = $failureCount
+    SuccessRate = $successRate
+    TimeoutFailures = $timeoutFailures
+    ConnectionFailures = $connectionFailures
+    CGNATLimitsDetected = $cgnatLimitsDetected
+    CGNATPattern = $cgnatPattern
+    Results = $results
+    Diagnosis = if ($successRate -lt 50) { "SEVERE_LIMITS" } elseif ($cgnatLimitsDetected) { "MODERATE_LIMITS" } else { "NO_LIMITS" }
+  }
+}
+
+function Test-DNSServerPerformance {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing DNS server performance for streaming domains..."
+  & $WriteLog "This test measures resolution speed across different DNS servers"
+  
+  $dnsServers = @(
+    @{ Name = "Google DNS"; Server = "8.8.8.8" },
+    @{ Name = "Cloudflare DNS"; Server = "1.1.1.1" },
+    @{ Name = "Quad9 DNS"; Server = "9.9.9.9" },
+    @{ Name = "OpenDNS"; Server = "208.67.222.222" },
+    @{ Name = "Comodo DNS"; Server = "8.26.56.26" }
+  )
+  
+  $streamingDomains = @(
+    @{ Name = "Netflix"; Domain = "netflix.com" },
+    @{ Name = "Apple TV"; Domain = "tv.apple.com" },
+    @{ Name = "YouTube"; Domain = "youtube.com" },
+    @{ Name = "Twitch"; Domain = "twitch.tv" },
+    @{ Name = "Disney+"; Domain = "disneyplus.com" },
+    @{ Name = "Amazon Prime"; Domain = "primevideo.com" },
+    @{ Name = "Hulu"; Domain = "hulu.com" },
+    @{ Name = "HBO Max"; Domain = "hbomax.com" }
+  )
+  
+  $results = @()
+  
+  foreach ($dnsServer in $dnsServers) {
+    & $WriteLog "Testing $($dnsServer.Name) ($($dnsServer.Server))..."
+    
+    $serverResults = @()
+    $totalTime = 0
+    $successCount = 0
+    $failureCount = 0
+    $slowQueries = 0
+    
+    foreach ($domain in $streamingDomains) {
+      try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $resolution = Resolve-DnsName -Name $domain.Domain -Server $dnsServer.Server -ErrorAction Stop -DnsOnly
+        $sw.Stop()
+        
+        if ($resolution -and $resolution.Count -gt 0) {
+          $responseTime = $sw.ElapsedMilliseconds
+          $totalTime += $responseTime
+          $successCount++
+          
+          if ($responseTime -gt 500) {
+            $slowQueries++
+            & $WriteLog "  $($domain.Name) ($($domain.Domain)): SLOW (${responseTime}ms)"
+          } else {
+            & $WriteLog "  $($domain.Name) ($($domain.Domain)): OK (${responseTime}ms)"
+          }
+          
+          $serverResults += @{
+            Domain = $domain.Name
+            Hostname = $domain.Domain
+            ResponseTime = $responseTime
+            Success = $true
+            IPAddresses = $resolution.Count
+            Error = $null
+          }
+        } else {
+          $failureCount++
+          $serverResults += @{
+            Domain = $domain.Name
+            Hostname = $domain.Domain
+            ResponseTime = $null
+            Success = $false
+            IPAddresses = 0
+            Error = "No resolution returned"
+          }
+          & $WriteLog "  $($domain.Name) ($($domain.Domain)): FAILED - No resolution"
+        }
+      } catch {
+        $failureCount++
+        $serverResults += @{
+          Domain = $domain.Name
+          Hostname = $domain.Domain
+          ResponseTime = $null
+          Success = $false
+          IPAddresses = 0
+          Error = $_.Exception.Message
+        }
+        & $WriteLog "  $($domain.Name) ($($domain.Domain)): FAILED - $($_.Exception.Message)"
+      }
+      
+      Start-Sleep -Milliseconds 100
+    }
+    
+    # Calculate server statistics
+    $avgResponseTime = if ($successCount -gt 0) {
+      [Math]::Round($totalTime / $successCount, 1)
+    } else { 0 }
+    
+    $successRate = [Math]::Round(($successCount / $streamingDomains.Count) * 100, 1)
+    $slowQueryPercent = [Math]::Round(($slowQueries / $successCount) * 100, 1)
+    
+    $results += @{
+      DNSServer = $dnsServer.Name
+      ServerIP = $dnsServer.Server
+      AverageResponseTime = $avgResponseTime
+      SuccessRate = $successRate
+      SlowQueries = $slowQueries
+      SlowQueryPercent = $slowQueryPercent
+      TotalQueries = $streamingDomains.Count
+      SuccessfulQueries = $successCount
+      FailedQueries = $failureCount
+      DomainResults = $serverResults
+    }
+    
+    & $WriteLog "  Summary: $successRate% success, ${avgResponseTime}ms avg, $slowQueries slow queries"
+    
+    # Classify performance
+    if ($successRate -eq 100 -and $avgResponseTime -lt 100) {
+      & $WriteLog "  Performance: EXCELLENT"
+    } elseif ($successRate -ge 95 -and $avgResponseTime -lt 200) {
+      & $WriteLog "  Performance: GOOD"
+    } elseif ($successRate -ge 80 -and $avgResponseTime -lt 500) {
+      & $WriteLog "  Performance: FAIR"
+    } else {
+      & $WriteLog "  Performance: POOR"
+    }
+    
+    Start-Sleep -Seconds 1
+  }
+  
+  # Overall analysis
+  $bestServer = if ($results -and $results.Count -gt 0) { 
+    $results | Sort-Object { $_.AverageResponseTime + (100 - $_.SuccessRate) } | Select-Object -First 1 
+  } else { $null }
+  $worstServer = if ($results -and $results.Count -gt 0) { 
+    $results | Sort-Object { $_.AverageResponseTime + (100 - $_.SuccessRate) } | Select-Object -Last 1 
+  } else { $null }
+  
+  $overallAvgTime = if ($results -and $results.Count -gt 0) {
+    $validResults = $results | Where-Object { $_.AverageResponseTime -gt 0 }
+    if ($validResults -and $validResults.Count -gt 0) {
+      [Math]::Round(($validResults | Measure-Object -Property AverageResponseTime -Average).Average, 1)
+    } else { 0 }
+  } else { 0 }
+  
+  $overallSuccessRate = if ($results -and $results.Count -gt 0) {
+    [Math]::Round(($results | Measure-Object -Property SuccessRate -Average).Average, 1)
+  } else { 0 }
+  
+  & $WriteLog "DNS Server Performance Analysis:"
+  & $WriteLog "  Overall average response time: ${overallAvgTime}ms"
+  & $WriteLog "  Overall success rate: $overallSuccessRate%"
+  
+  if ($bestServer -and $bestServer.DNSServer -and $bestServer.AverageResponseTime) {
+    & $WriteLog "  Best performing server: $($bestServer.DNSServer) (${bestServer.AverageResponseTime}ms avg)"
+  } else {
+    & $WriteLog "  Best performing server: No valid data available"
+  }
+  
+  if ($worstServer -and $worstServer.DNSServer -and $worstServer.AverageResponseTime) {
+    & $WriteLog "  Worst performing server: $($worstServer.DNSServer) (${worstServer.AverageResponseTime}ms avg)"
+  } else {
+    & $WriteLog "  Worst performing server: No valid data available"
+  }
+  
+  # Check for DNS issues
+  $dnsIssues = @()
+  if ($overallAvgTime -gt 500) {
+    $dnsIssues += "Slow DNS resolution (>500ms average)"
+  }
+  if ($overallSuccessRate -lt 90) {
+    $dnsIssues += "High DNS failure rate (<90% success)"
+  }
+  
+  $serversWithSlowQueries = @($results | Where-Object { $_.SlowQueryPercent -gt 50 }).Count
+  if ($serversWithSlowQueries -gt 0) {
+    $dnsIssues += "$serversWithSlowQueries DNS servers have >50% slow queries"
+  }
+  
+  if ($dnsIssues.Count -gt 0) {
+    & $WriteLog "  DNS Issues Detected:"
+    foreach ($issue in $dnsIssues) {
+      & $WriteLog "    - $issue"
+    }
+    & $WriteLog "  DIAGNOSIS: DNS performance issues may cause app timeouts"
+    & $WriteLog "  RECOMMENDATION: Switch to faster DNS servers or investigate DNS configuration"
+  } else {
+    & $WriteLog "  DIAGNOSIS: DNS performance is acceptable"
+    & $WriteLog "  RECOMMENDATION: DNS is not likely causing connection issues"
+  }
+  
+  return @{
+    OverallAverageTime = $overallAvgTime
+    OverallSuccessRate = $overallSuccessRate
+    BestServer = $bestServer
+    WorstServer = $worstServer
+    DNSIssues = $dnsIssues
+    ServerResults = $results
+    Diagnosis = if ($dnsIssues.Count -gt 0) { "DNS_PERFORMANCE_ISSUES" } else { "DNS_PERFORMANCE_OK" }
+  }
+}
+
+function Test-SustainedConnection {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing sustained connection stability..."
+  & $WriteLog "This test holds TCP connections open for 10+ seconds to simulate streaming"
+  
+  $streamingServices = @(
+    @{ Name = "Netflix"; Host = "netflix.com"; Port = 443 },
+    @{ Name = "Apple TV"; Host = "tv.apple.com"; Port = 443 },
+    @{ Name = "YouTube"; Host = "youtube.com"; Port = 443 },
+    @{ Name = "Twitch"; Host = "twitch.tv"; Port = 443 },
+    @{ Name = "Disney+"; Host = "disneyplus.com"; Port = 443 }
+  )
+  
+  $results = @()
+  
+  foreach ($service in $streamingServices) {
+    & $WriteLog "Testing sustained connection to $($service.Name)..."
+    
+    $connectionResults = @()
+    $totalTestTime = 15  # seconds
+    
+    try {
+      $tcpClient = New-Object System.Net.Sockets.TcpClient
+      $tcpClient.ReceiveTimeout = 10000
+      $tcpClient.SendTimeout = 10000
+      
+      # Establish connection
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $tcpClient.Connect($service.Host, $service.Port)
+      $connectionTime = $sw.ElapsedMilliseconds
+      
+      if ($tcpClient.Connected) {
+        & $WriteLog "  Connection established: ${connectionTime}ms"
+        
+        # Monitor connection for sustained period
+        $startTime = Get-Date
+        $endTime = $startTime.AddSeconds($totalTestTime)
+        $checkInterval = 2  # Check every 2 seconds
+        
+        $connectionStable = $true
+        $disconnectionTime = $null
+        
+        while ((Get-Date) -lt $endTime -and $connectionStable) {
+          try {
+            # Test if connection is still alive by checking if we can read/write
+            $stream = $tcpClient.GetStream()
+            
+            # Send a small keep-alive-like data (HTTP HEAD request)
+            $request = "HEAD / HTTP/1.1`r`nHost: $($service.Host)`r`nConnection: keep-alive`r`n`r`n"
+            $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
+            
+            $stream.Write($requestBytes, 0, $requestBytes.Length)
+            
+            # Try to read response (with short timeout)
+            $stream.ReadTimeout = 2000
+            $buffer = New-Object byte[] 1024
+            $bytesRead = $stream.Read($buffer, 0, $buffer.Length)
+            
+            $elapsedSeconds = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+            & $WriteLog "  [$($elapsedSeconds)s] Connection stable (${bytesRead} bytes received)"
+            
+            $connectionResults += @{
+              Time = $elapsedSeconds
+              Status = "STABLE"
+              BytesReceived = $bytesRead
+              Error = $null
+            }
+            
+          } catch {
+            $connectionStable = $false
+            $disconnectionTime = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+            & $WriteLog "  [$($disconnectionTime)s] Connection lost: $($_.Exception.Message)"
+            
+            $connectionResults += @{
+              Time = $disconnectionTime
+              Status = "LOST"
+              BytesReceived = 0
+              Error = $_.Exception.Message
+            }
+          }
+          
+          Start-Sleep -Seconds $checkInterval
+        }
+        
+        # Close connection
+        $tcpClient.Close()
+        
+        # Analyze sustained connection results
+        $totalDuration = if ($disconnectionTime) { $disconnectionTime } else { $totalTestTime }
+        $stableDuration = if ($disconnectionTime) { $disconnectionTime - 2 } else { $totalTestTime }
+        $stabilityPercent = [Math]::Round(($stableDuration / $totalTestTime) * 100, 1)
+        
+        $results += @{
+          Service = $service.Name
+          Host = $service.Host
+          ConnectionTime = $connectionTime
+          TotalDuration = $totalDuration
+          StableDuration = $stableDuration
+          StabilityPercent = $stabilityPercent
+          ConnectionLost = if ($disconnectionTime) { $true } else { $false }
+          DisconnectionTime = $disconnectionTime
+          ConnectionResults = $connectionResults
+        }
+        
+        & $WriteLog "  Summary: $stabilityPercent% stable over ${totalDuration}s"
+        
+        # Classify stability
+        if ($stabilityPercent -eq 100) {
+          & $WriteLog "  Stability: EXCELLENT"
+        } elseif ($stabilityPercent -ge 90) {
+          & $WriteLog "  Stability: GOOD"
+        } elseif ($stabilityPercent -ge 70) {
+          & $WriteLog "  Stability: FAIR"
+        } else {
+          & $WriteLog "  Stability: POOR"
+        }
+        
+      } else {
+        & $WriteLog "  Failed to establish connection"
+        $results += @{
+          Service = $service.Name
+          Host = $service.Host
+          ConnectionTime = $connectionTime
+          TotalDuration = 0
+          StableDuration = 0
+          StabilityPercent = 0
+          ConnectionLost = $true
+          DisconnectionTime = 0
+          ConnectionResults = @()
+          Error = "Failed to establish initial connection"
+        }
+      }
+      
+    } catch {
+      & $WriteLog "  Connection error: $($_.Exception.Message)"
+      $results += @{
+        Service = $service.Name
+        Host = $service.Host
+        ConnectionTime = $null
+        TotalDuration = 0
+        StableDuration = 0
+        StabilityPercent = 0
+        ConnectionLost = $true
+        DisconnectionTime = 0
+        ConnectionResults = @()
+        Error = $_.Exception.Message
+      }
+    }
+    
+    Start-Sleep -Seconds 2
+  }
+  
+  # Overall analysis
+  $stableConnections = $results | Where-Object { $_.StabilityPercent -ge 90 }
+  $failedConnections = $results | Where-Object { $_.ConnectionLost -eq $true -or $_.StabilityPercent -lt 70 }
+  
+  $avgStability = [Math]::Round(($results | Where-Object { $_.StabilityPercent -gt 0 } | Measure-Object -Property StabilityPercent -Average).Average, 1)
+  $avgConnectionTime = [Math]::Round(($results | Where-Object { $_.ConnectionTime -ne $null } | Measure-Object -Property ConnectionTime -Average).Average, 1)
+  
+  & $WriteLog "Sustained Connection Analysis:"
+  & $WriteLog "  Average stability: $avgStability%"
+  & $WriteLog "  Average connection time: ${avgConnectionTime}ms"
+  & $WriteLog "  Stable connections: $($stableConnections.Count)/$($streamingServices.Count)"
+  & $WriteLog "  Failed/problematic connections: $($failedConnections.Count)/$($streamingServices.Count)"
+  
+  if ($failedConnections.Count -gt 0) {
+    & $WriteLog "  Services with connection issues:"
+    foreach ($service in $failedConnections) {
+      $issue = if ($service.PSObject.Properties['Error'] -and $service.Error -ne $null) { $service.Error } else { "$($service.StabilityPercent)% stability" }
+      & $WriteLog "    - $($service.Service): $issue"
+    }
+  }
+  
+  # Diagnosis
+  if ($avgStability -lt 70) {
+    & $WriteLog "  DIAGNOSIS: Major sustained connection issues - connections drop during streaming"
+    & $WriteLog "  IMPACT: Streaming services will frequently disconnect or show errors"
+    & $WriteLog "  RECOMMENDATION: Investigate network stability, ISP connection limits, or router issues"
+  } elseif ($failedConnections.Count -gt ($streamingServices.Count * 0.3)) {
+    & $WriteLog "  DIAGNOSIS: Multiple services have sustained connection problems"
+    & $WriteLog "  IMPACT: Some streaming services will be unreliable"
+    & $WriteLog "  RECOMMENDATION: Check for service-specific routing issues or DNS problems"
+  } elseif ($avgConnectionTime -gt 3000) {
+    & $WriteLog "  DIAGNOSIS: Slow connection establishment but stable once connected"
+    & $WriteLog "  IMPACT: Apps may timeout during initial connection but work once connected"
+    & $WriteLog "  RECOMMENDATION: Increase app timeout settings or investigate connection path"
+  } else {
+    & $WriteLog "  DIAGNOSIS: Sustained connection performance is good"
+    & $WriteLog "  IMPACT: Streaming services should work reliably"
+    & $WriteLog "  RECOMMENDATION: Connection stability is not the cause of streaming issues"
+  }
+  
+  return @{
+    AverageStability = $avgStability
+    AverageConnectionTime = $avgConnectionTime
+    StableConnections = $stableConnections.Count
+    FailedConnections = $failedConnections.Count
+    TotalServices = $streamingServices.Count
+    ServiceResults = $results
+    Diagnosis = if ($avgStability -lt 70) { "MAJOR_STABILITY_ISSUES" } elseif ($failedConnections.Count -gt ($streamingServices.Count * 0.3)) { "MULTIPLE_SERVICE_ISSUES" } elseif ($avgConnectionTime -gt 3000) { "SLOW_CONNECTION_ESTABLISHMENT" } else { "GOOD_STABILITY" }
+  }
+}
+
+function Test-LargePacketHandling {
+  param([scriptblock]$WriteLog)
+  
+  & $WriteLog "Testing large packet handling with Don't Fragment flag..."
+  & $WriteLog "This test validates MTU configuration with different packet sizes"
+  
+  $testHost = '1.1.1.1'
+  $packetSizes = @(64, 128, 256, 512, 1024, 1472, 1492)
+  $results = @()
+  
+  foreach ($size in $packetSizes) {
+    & $WriteLog "Testing packet size: $size bytes..."
+    
+    $success = $false
+    $latency = $null
+    $errorMessage = $null
+    
+    try {
+      # Test with specific buffer size
+      $ping = Test-Connection -TargetName $testHost -Count 1 -BufferSize $size -TimeoutSeconds 3 -ErrorAction Stop
+      
+      if ($ping -and $ping.ResponseTime) {
+        $success = $true
+        $latency = $ping.ResponseTime
+        & $WriteLog "  $size bytes: SUCCESS (${latency}ms)"
+      } else {
+        $errorMessage = "No response received"
+        & $WriteLog "  $size bytes: FAILED - No response"
+      }
+    } catch {
+      $errorMessage = $_.Exception.Message
+      
+      # Check for specific MTU-related errors
+      if ($_.Exception.Message -match "fragment|MTU|too large") {
+        & $WriteLog "  $size bytes: FAILED - MTU/Fragmentation issue: $errorMessage"
+      } else {
+        & $WriteLog "  $size bytes: FAILED - $errorMessage"
+      }
+    }
+    
+    $results += @{
+      PacketSize = $size
+      Success = $success
+      Latency = $latency
+      Error = $errorMessage
+      MTUIssue = if ($errorMessage -and $errorMessage -match "fragment|MTU|too large") { $true } else { $false }
+    }
+    
+    Start-Sleep -Milliseconds 500
+  }
+  
+  # Analyze results
+  $successfulSizes = $results | Where-Object { $_.Success }
+  $failedSizes = $results | Where-Object { -not $_.Success }
+  $mtuIssues = $results | Where-Object { $_.MTUIssue }
+  
+  $maxSuccessfulSize = if ($successfulSizes) { ($successfulSizes | Measure-Object -Property PacketSize -Maximum).Maximum } else { 0 }
+  $minFailedSize = if ($failedSizes) { ($failedSizes | Measure-Object -Property PacketSize -Minimum).Minimum } else { 0 }
+  
+  & $WriteLog "Large Packet Handling Analysis:"
+  & $WriteLog "  Successful packet sizes: $($successfulSizes.Count)/$($packetSizes.Count)"
+  & $WriteLog "  Maximum successful size: $maxSuccessfulSize bytes"
+  & $WriteLog "  Failed packet sizes: $($failedSizes.Count)"
+  & $WriteLog "  MTU-related failures: $($mtuIssues.Count)"
+  
+  if ($mtuIssues.Count -gt 0) {
+    & $WriteLog "  MTU Issues Detected:"
+    foreach ($issue in $mtuIssues) {
+      & $WriteLog "    - $($issue.PacketSize) bytes: $($issue.Error)"
+    }
+  }
+  
+  # Determine MTU configuration
+  $mtuConfigured = $false
+  
+  if ($maxSuccessfulSize -ge 1472 -and $failedSizes.Count -eq 0) {
+    $mtuConfigured = $true
+    & $WriteLog "  MTU Status: OPTIMAL - All packet sizes work correctly"
+  } elseif ($maxSuccessfulSize -ge 1024 -and $mtuIssues.Count -eq 0) {
+    $mtuConfigured = $true
+    & $WriteLog "  MTU Status: ADEQUATE - Most packet sizes work correctly"
+  } elseif ($mtuIssues.Count -gt 0) {
+    $mtuConfigured = $false
+    & $WriteLog "  MTU Status: FRAGMENTATION ISSUES - Some large packets fail"
+  } elseif ($maxSuccessfulSize -lt 512) {
+    $mtuConfigured = $false
+    & $WriteLog "  MTU Status: SEVERE LIMITATIONS - Only small packets work"
+  } else {
+    $mtuConfigured = $true
+    & $WriteLog "  MTU Status: ACCEPTABLE - Reasonable packet size support"
+  }
+  
+  # Calculate recommended MTU
+  $recommendedMTU = if ($maxSuccessfulSize -gt 0) { $maxSuccessfulSize + 28 } else { 576 }
+  
+  # Diagnosis and recommendations
+  if (-not $mtuConfigured) {
+    if ($mtuIssues.Count -gt 0) {
+      & $WriteLog "  DIAGNOSIS: MTU fragmentation issues - large packets are being fragmented or dropped"
+      & $WriteLog "  IMPACT: Streaming video may have quality issues or frequent buffering"
+      & $WriteLog "  RECOMMENDATION: Configure MTU to $recommendedMTU or enable PMTUD"
+    } else {
+      & $WriteLog "  DIAGNOSIS: Severe packet size limitations - only small packets work"
+      & $WriteLog "  IMPACT: Streaming services may fail to load or have poor quality"
+      & $WriteLog "  RECOMMENDATION: Contact ISP about network configuration or try different connection"
+    }
+  } else {
+    & $WriteLog "  DIAGNOSIS: MTU configuration is working correctly"
+    & $WriteLog "  IMPACT: Packet size is not limiting streaming performance"
+    & $WriteLog "  RECOMMENDATION: MTU is not the cause of streaming issues"
+  }
+  
+  return @{
+    MaxSuccessfulSize = $maxSuccessfulSize
+    MinFailedSize = $minFailedSize
+    SuccessfulSizes = $successfulSizes.Count
+    FailedSizes = $failedSizes.Count
+    MTUIssues = $mtuIssues.Count
+    MTUConfigured = $mtuConfigured
+    RecommendedMTU = $recommendedMTU
+    PacketResults = $results
+    Diagnosis = if (-not $mtuConfigured) { if ($mtuIssues.Count -gt 0) { "MTU_FRAGMENTATION_ISSUES" } else { "SEVERE_PACKET_LIMITATIONS" } } else { "MTU_CONFIGURATION_OK" }
+  }
 }
 
 Export-ModuleMember -Function *

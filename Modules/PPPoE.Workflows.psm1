@@ -156,6 +156,13 @@ function Invoke-PPPoEDiagnosticWorkflow {
           & $WriteLog "=== OPTIONAL STABILITY TEST ==="
           $Health = Invoke-OptionalStabilityTest -Health $Health -WriteLog $WriteLog
         }
+
+        # Phase 9: Advanced Streaming Diagnostics (Full Log Only)
+        if ($FullLog) {
+          & $WriteLog ""
+          & $WriteLog "=== ADVANCED STREAMING DIAGNOSTICS ==="
+          $Health = Invoke-AdvancedStreamingDiagnostics -Health $Health -WriteLog $WriteLog
+        }
       }
     } else {
       # Link is up but authentication failed
@@ -287,6 +294,208 @@ function Invoke-QuickDiagnosticWorkflow {
     PPPInterface = if ($pppInterface) { $pppInterface } else { $null }
     PPPIP = if ($pppIP) { $pppIP } else { $null }
   }
+}
+
+function Invoke-AdvancedStreamingDiagnostics {
+  param(
+    [hashtable]$Health,
+    [scriptblock]$WriteLog
+  )
+  
+  & $WriteLog "Running advanced streaming diagnostics to identify specific issues..."
+  & $WriteLog "These tests are designed to pinpoint the root cause of streaming problems"
+  
+  # Test 1: IPv6 Fallback Delay Test (Highest Priority)
+  & $WriteLog ""
+  & $WriteLog "--- Test 1: IPv6 Fallback Delay Test ---"
+  try {
+    $ipv6Result = Test-IPv6FallbackDelay -WriteLog $WriteLog
+    $Health = Add-Health $Health 'IPv6 Fallback Delay Test' ($ipv6Result.Diagnosis) 101
+  } catch {
+    & $WriteLog "IPv6 Fallback Delay Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'IPv6 Fallback Delay Test' 'ERROR' 101
+  }
+  
+  # Test 2: Connection Establishment Speed Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 2: Connection Establishment Speed Test ---"
+  try {
+    $connectionSpeedResult = Test-ConnectionEstablishmentSpeed -WriteLog $WriteLog
+    $Health = Add-Health $Health 'Connection Establishment Speed' ($connectionSpeedResult.Diagnosis) 102
+  } catch {
+    & $WriteLog "Connection Establishment Speed Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'Connection Establishment Speed' 'ERROR' 102
+  }
+  
+  # Test 3: CGNAT Connection Capacity Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 3: CGNAT Connection Capacity Test ---"
+  try {
+    $cgnatResult = Test-CGNATConnectionCapacity -WriteLog $WriteLog
+    $Health = Add-Health $Health 'CGNAT Connection Capacity' ($cgnatResult.Diagnosis) 103
+  } catch {
+    & $WriteLog "CGNAT Connection Capacity Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'CGNAT Connection Capacity' 'ERROR' 103
+  }
+  
+  # Test 4: ICMP Rate Limiting Detection
+  & $WriteLog ""
+  & $WriteLog "--- Test 4: ICMP Rate Limiting Detection ---"
+  try {
+    $icmpRateLimitResult = Test-ICMPRateLimiting -WriteLog $WriteLog
+    $Health = Add-Health $Health 'ICMP Rate Limiting Detection' ($icmpRateLimitResult.Diagnosis) 104
+  } catch {
+    & $WriteLog "ICMP Rate Limiting Detection Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'ICMP Rate Limiting Detection' 'ERROR' 104
+  }
+  
+  # Test 5: Streaming Service DNS & TCP Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 5: Streaming Service DNS & TCP Test ---"
+  try {
+    $streamingServiceResult = Test-StreamingServiceDNSAndTCP -WriteLog $WriteLog
+    $Health = Add-Health $Health 'Streaming Service Connectivity' ($streamingServiceResult.Diagnosis) 105
+  } catch {
+    & $WriteLog "Streaming Service DNS & TCP Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'Streaming Service Connectivity' 'ERROR' 105
+  }
+  
+  # Test 6: DNS Server Performance Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 6: DNS Server Performance Test ---"
+  try {
+    $dnsPerformanceResult = Test-DNSServerPerformance -WriteLog $WriteLog
+    $Health = Add-Health $Health 'DNS Server Performance' ($dnsPerformanceResult.Diagnosis) 106
+  } catch {
+    & $WriteLog "DNS Server Performance Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'DNS Server Performance' 'ERROR' 106
+  }
+  
+  # Test 7: Sustained Connection Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 7: Sustained Connection Test ---"
+  try {
+    $sustainedConnectionResult = Test-SustainedConnection -WriteLog $WriteLog
+    $Health = Add-Health $Health 'Sustained Connection Stability' ($sustainedConnectionResult.Diagnosis) 107
+  } catch {
+    & $WriteLog "Sustained Connection Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'Sustained Connection Stability' 'ERROR' 107
+  }
+  
+  # Test 8: IPv6 Interference Check
+  & $WriteLog ""
+  & $WriteLog "--- Test 8: IPv6 Interference Check ---"
+  try {
+    $ipv6InterferenceResult = Test-IPv6Interference -WriteLog $WriteLog
+    $Health = Add-Health $Health 'IPv6 Interference Check' ($ipv6InterferenceResult.Diagnosis) 108
+  } catch {
+    & $WriteLog "IPv6 Interference Check failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'IPv6 Interference Check' 'ERROR' 108
+  }
+  
+  # Test 9: Large Packet Handling Test
+  & $WriteLog ""
+  & $WriteLog "--- Test 9: Large Packet Handling Test ---"
+  try {
+    $largePacketResult = Test-LargePacketHandling -WriteLog $WriteLog
+    $Health = Add-Health $Health 'Large Packet Handling' ($largePacketResult.Diagnosis) 109
+  } catch {
+    & $WriteLog "Large Packet Handling Test failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'Large Packet Handling' 'ERROR' 109
+  }
+  
+  # Test 10: Default Route Verification
+  & $WriteLog ""
+  & $WriteLog "--- Test 10: Default Route Verification ---"
+  try {
+    $defaultRouteResult = Test-DefaultRouteVerification -WriteLog $WriteLog
+    $Health = Add-Health $Health 'Default Route Verification' ($defaultRouteResult.Diagnosis) 110
+  } catch {
+    & $WriteLog "Default Route Verification failed: $($_.Exception.Message)"
+    $Health = Add-Health $Health 'Default Route Verification' 'ERROR' 110
+  }
+  
+  # Summary and Recommendations
+  & $WriteLog ""
+  & $WriteLog "=== ADVANCED STREAMING DIAGNOSTICS SUMMARY ==="
+  
+  # Count issues by severity
+  $criticalIssues = @()
+  $moderateIssues = @()
+  $minorIssues = @()
+  
+  # Analyze results and categorize issues
+  $healthItems = $Health.GetEnumerator() | Where-Object { $_.Key -match 'Test|Detection|Connectivity|Performance|Stability|Check|Verification' -and $_.Value -ne 'OK' -and $_.Value -ne 'ERROR' }
+  
+  foreach ($item in $healthItems) {
+    $diagnosis = $item.Value
+    if ($diagnosis -match 'SEVERE|MAJOR|ALL_SERVICES_FAILED|SIGNIFICANT_DELAYS|FRAGMENTATION_ISSUES') {
+      $criticalIssues += "$($item.Key): $diagnosis"
+    } elseif ($diagnosis -match 'MODERATE|SOME_ISSUES|DNS_PERFORMANCE_ISSUES|MULTIPLE_SERVICE_ISSUES|BURST_RATE_LIMITED') {
+      $moderateIssues += "$($item.Key): $diagnosis"
+    } elseif ($diagnosis -match 'SLOW|ACCEPTABLE|NO_LIMITS|GOOD|OK') {
+      $minorIssues += "$($item.Key): $diagnosis"
+    }
+  }
+  
+  & $WriteLog "Issue Summary:"
+  & $WriteLog "  Critical Issues: $($criticalIssues.Count)"
+  & $WriteLog "  Moderate Issues: $($moderateIssues.Count)"
+  & $WriteLog "  Minor Issues: $($minorIssues.Count)"
+  
+  if ($criticalIssues.Count -gt 0) {
+    & $WriteLog "Critical Issues Found:"
+    foreach ($issue in $criticalIssues) {
+      & $WriteLog "  - $issue"
+    }
+  }
+  
+  if ($moderateIssues.Count -gt 0) {
+    & $WriteLog "Moderate Issues Found:"
+    foreach ($issue in $moderateIssues) {
+      & $WriteLog "  - $issue"
+    }
+  }
+  
+  # Provide prioritized recommendations
+  & $WriteLog ""
+  & $WriteLog "=== PRIORITIZED RECOMMENDATIONS ==="
+  
+  if ($criticalIssues.Count -gt 0) {
+    & $WriteLog "IMMEDIATE ACTIONS REQUIRED:"
+    if ($criticalIssues -match 'IPv6') {
+      & $WriteLog "  1. Disable IPv6 on PPPoE interface - this is likely causing connection delays"
+      & $WriteLog "     Command: netsh interface ipv6 set interface \"PPPoE Interface Name\" disable"
+    }
+    if ($criticalIssues -match 'CGNAT|Connection Capacity') {
+      & $WriteLog "  2. Contact ISP about CGNAT connection limits - request static IP if needed"
+    }
+    if ($criticalIssues -match 'DNS|Streaming Service') {
+      & $WriteLog "  3. Change DNS servers to 1.1.1.1 and 8.8.8.8 for better performance"
+    }
+  }
+  
+  if ($moderateIssues.Count -gt 0) {
+    & $WriteLog "RECOMMENDED ACTIONS:"
+    if ($moderateIssues -match 'ICMP|Rate Limiting') {
+      & $WriteLog "  1. Monitor for MTU-related issues during streaming"
+    }
+    if ($moderateIssues -match 'Connection Speed|Establishment') {
+      & $WriteLog "  2. Increase application timeout settings"
+    }
+  }
+  
+  if ($criticalIssues.Count -eq 0 -and $moderateIssues.Count -eq 0) {
+    & $WriteLog "NO MAJOR ISSUES DETECTED:"
+    & $WriteLog "  Advanced diagnostics show no significant problems with your connection."
+    & $WriteLog "  If streaming issues persist, they may be related to:"
+    & $WriteLog "  - Application-specific problems"
+    & $WriteLog "  - ISP throttling or content filtering"
+    & $WriteLog "  - Router/firewall configuration"
+    & $WriteLog "  - Local network congestion"
+  }
+  
+  return $Health
 }
 
 Export-ModuleMember -Function *
