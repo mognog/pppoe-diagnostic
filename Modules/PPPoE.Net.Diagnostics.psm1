@@ -5,7 +5,8 @@ Set-StrictMode -Version 3.0
 function Test-ONTAvailability {
   param([scriptblock]$WriteLog)
   
-  & $WriteLog "Testing ONT (Optical Network Terminal) availability..."
+  & $WriteLog "Testing ONT (Optical Network Terminal) management interface..."
+  & $WriteLog "NOTE: This tests if ONT management is accessible - many ONTs don't expose this"
   
   # Common ONT management IP addresses
   $ontIPs = @('192.168.1.1', '192.168.100.1', '192.168.0.1', '10.0.0.1')
@@ -13,18 +14,18 @@ function Test-ONTAvailability {
   
   foreach ($ip in $ontIPs) {
     try {
-      & $WriteLog "Testing ONT at $ip... (testing 4 common ONT addresses)"
+      & $WriteLog "Testing ONT management at $ip... (testing 4 common addresses)"
       $ping = Test-Connection -TargetName $ip -Count 2 -TimeoutSeconds 3 -ErrorAction Stop
       if ($ping -and $ping.Count -gt 0) {
         $avgLatency = [Math]::Round(($ping | Measure-Object -Property Latency -Average).Average, 1)
         & $WriteLog "  ONT at $ip`: REACHABLE (${avgLatency}ms avg)"
         $ontResults += @{ IP = $ip; Status = "REACHABLE"; Latency = $avgLatency }
       } else {
-        & $WriteLog "  ONT at $ip`: UNREACHABLE"
+        & $WriteLog "  ONT at $ip`: Not accessible"
         $ontResults += @{ IP = $ip; Status = "UNREACHABLE"; Latency = $null }
       }
     } catch {
-      & $WriteLog "  ONT at $ip`: UNREACHABLE"
+      & $WriteLog "  ONT at $ip`: Not accessible"
       $ontResults += @{ IP = $ip; Status = "UNREACHABLE"; Latency = $null }
     }
   }
@@ -32,10 +33,10 @@ function Test-ONTAvailability {
   # Check if any ONT is reachable
   $reachableONTs = $ontResults | Where-Object { $_.Status -eq "REACHABLE" }
   if ($reachableONTs -and $reachableONTs -is [array] -and $reachableONTs.Count -gt 0) {
-    & $WriteLog "ONT Status: At least one ONT is reachable - local link appears OK"
+    & $WriteLog "ONT Management: Accessible at $($reachableONTs.Count) address(es)"
     return @{ Status = "OK"; ReachableONTs = $reachableONTs; AllResults = $ontResults }
   } else {
-    & $WriteLog "ONT Status: No ONTs reachable - possible fibre or ONT issue"
+    & $WriteLog "ONT Management: Not accessible (this is normal for many ONTs - check LED status instead)"
     return @{ Status = "FAIL"; ReachableONTs = @(); AllResults = $ontResults }
   }
 }

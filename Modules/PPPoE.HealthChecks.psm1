@@ -147,12 +147,12 @@ function Invoke-NetworkAdapterChecks {
       $Health = Add-Health $Health 'Adapter driver' 'WARN (Driver status unknown)' 4.2
     }
     
-    # [4.3] ONT Availability Check
+    # [4.3] ONT Management Interface Check (optional - many ONTs don't expose this)
     $ontStatus = Test-ONTAvailability -WriteLog $WriteLog
     if ($ontStatus.Status -eq "OK") {
-      $Health = Add-Health $Health 'ONT availability' "OK ($($ontStatus.ReachableONTs.Count) reachable)" 4.3
+      $Health = Add-Health $Health 'ONT management' "OK ($($ontStatus.ReachableONTs.Count) accessible)" 4.3
     } else {
-      $Health = Add-Health $Health 'ONT availability' 'WARN (No ONTs reachable)' 4.3
+      $Health = Add-Health $Health 'ONT management' 'INFO (Not accessible - check LED status)' 4.3
     }
     
     # [4.4] ONT LED Reminder
@@ -460,11 +460,11 @@ function Invoke-ConnectivityChecks {
   & $WriteLog "Testing packet loss to 1.1.1.1..."
   $packetLoss = Test-PacketLoss -TargetIP '1.1.1.1' -Count 20 -WriteLog $WriteLog
   if ($packetLoss.LossPercent -eq 0) {
-    $Health = Add-Health $Health 'Packet loss test' "OK (0% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    $Health = Add-Health $Health 'Packet loss test' "OK (0% loss, $($packetLoss.AvgLatency)ms avg)" 22
   } elseif ($packetLoss.LossPercent -le 2) {
-    $Health = Add-Health $Health 'Packet loss test' "WARN ($($packetLoss.LossPercent)% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    $Health = Add-Health $Health 'Packet loss test' "WARN ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
   } else {
-    $Health = Add-Health $Health 'Packet loss test' "FAIL ($($packetLoss.LossPercent)% loss, ${$packetLoss.AvgLatency}ms avg)" 22
+    $Health = Add-Health $Health 'Packet loss test' "FAIL ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
   }
 
   # Route Stability Test
