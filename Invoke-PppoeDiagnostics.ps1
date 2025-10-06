@@ -83,7 +83,7 @@ try {
     if ($result.PPPInterface) {
       Write-Log "PPP interface: $($result.PPPInterface.InterfaceAlias)"
     }
-    if ($result.PPPIP) { Write-Log ("PPP IP address: {0}" -f (Describe-IPv4ForLog $result.PPPIP.IPAddress)) }
+    if ($result.PPPIP) { Write-Log ("PPP IP address: {0}" -f (Get-IPv4LogDescription -IPv4 $result.PPPIP.IPAddress)) }
   } else {
     Write-Log "Diagnostic failed - no results available"
   }

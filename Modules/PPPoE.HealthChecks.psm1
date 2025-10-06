@@ -203,6 +203,7 @@ function Invoke-NetworkAdapterChecks {
 }
 
 function Invoke-PPPoEConnectionChecks {
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword','', Justification='Underlying rasdial.exe requires plain text password; PSCredential/SecureString are not compatible without decryption step.')]
   param(
     [hashtable]$Health,
     [string]$ConnectionNameToUse,
@@ -404,15 +405,6 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'SKIP (ICMP blocked by provider)' 19
   }
 
-  # ICMP vs TCP informational note if they disagree
-  if (-not $icmpBlocked) {
-    $tcpSummary = Get-HealthTcpSummary -Health $Health
-    $icmpFail = ($Health.Values | Where-Object { $_ -match 'Ping \(1\.1\.1\.1\) via PPP.*FAIL|Ping \(8\.8\.8\.8\) via PPP.*FAIL' })
-    if ($icmpFail -and $tcpSummary -match 'OK') {
-      $Health = Add-Health $Health 'ICMP vs TCP' 'INFO (ICMP inconsistent; provider likely rate-limits ICMP; prefer TCP checks)' 19.05
-    }
-  }
-  
   # [19.1] TCP Connectivity Tests
   & $WriteLog ""
   & $WriteLog "=== TCP CONNECTIVITY TESTS ==="
@@ -438,12 +430,16 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'TCP connectivity' "FAIL (0/$($tcpTests.Count) tests passed)" 19.1
   }
 
-  # Helper to summarize TCP for later notes
-  function Get-HealthTcpSummary { param([hashtable]$Health)
+  # ICMP vs TCP informational note if they disagree (now that TCP summary exists)
+  if (-not $icmpBlocked) {
     try {
-      $key = ($Health.Keys | Where-Object { $_ -match '^\d{2}_TCP connectivity$' } | Select-Object -First 1)
-      if ($key) { return $Health[$key] } else { return '' }
-    } catch { return '' }
+      $tcpKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_TCP connectivity$' } | Select-Object -First 1)
+      $tcpSummary = if ($tcpKey) { $Health[$tcpKey] } else { '' }
+    } catch { $tcpSummary = '' }
+    $icmpFail = ($Health.Values | Where-Object { $_ -match 'Ping \(1\.1\.1\.1\) via PPP.*FAIL|Ping \(8\.8\.8\.8\) via PPP.*FAIL' })
+    if ($icmpFail -and $tcpSummary -match 'OK') {
+      $Health = Add-Health $Health 'ICMP vs TCP' 'INFO (ICMP inconsistent; provider likely rate-limits ICMP; prefer TCP checks)' 19.05
+    }
   }
   
   # [19.2] Multi-Destination Routing Analysis (skip if ICMP blocked)
@@ -483,17 +479,65 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'Windows Firewall' 'WARN (Could not check firewall state)' 19.3
   }
 
-  # MTU probe (rough) - skip if ICMP blocked
-  # We try payload 1472 with DF; if success -> ~1492 MTU on PPP
+  # MTU probe (Path MTU Discovery) - skip if ICMP blocked
+  # Find the largest ICMP payload that succeeds with DF set.
   if (-not $icmpBlocked) {
     try {
-      Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
-      $Health = Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)' 20
+      $target = '1.1.1.1'
+      $maxPayloadCandidate = 1472  # 1472 + 28 = 1500 (Ethernet IP MTU)
+      $minPayloadCandidate = 1300  # reasonable lower bound to search
+      $lastGood = $null
+      $lastBad = $null
+
+      # Coarse decrement until success (handles very low PMTU cases)
+      $probe = $maxPayloadCandidate
+      while ($probe -ge $minPayloadCandidate) {
+        try {
+          Test-Connection -TargetName $target -Count 1 -DontFragment -BufferSize $probe -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
+          $lastGood = $probe
+          break
+        } catch {
+          $lastBad = $probe
+          $probe -= 16
+        }
+      }
+
+      if ($null -eq $lastGood) {
+        # Could not find a working payload in range
+        $Health = Add-Health $Health 'MTU probe (DF)' ("FAIL (no success down to ${minPayloadCandidate} bytes)") 20
+      } else {
+        # Refine upwards by binary-like search to find tight maximum
+        $low = $lastGood
+        $high = if ($lastBad) { [Math]::Min($lastBad - 1, $maxPayloadCandidate) } else { $maxPayloadCandidate }
+        $candidate = $low
+        while ($high -gt $low) {
+          $mid = [int][Math]::Ceiling(($low + $high) / 2)
+          try {
+            Test-Connection -TargetName $target -Count 1 -DontFragment -BufferSize $mid -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
+            $low = $mid
+            $candidate = $mid
+          } catch {
+            $high = $mid - 1
+          }
+        }
+
+        $pathIcmpPayload = $candidate
+        $pathIpMtu = $pathIcmpPayload + 28
+        $pppoeExpectedIpMtu = 1492
+        $recommendedMtu = [Math]::Min($pppoeExpectedIpMtu, $pathIpMtu)
+        $recommendedMru = $recommendedMtu  # PPPoE typically uses matching MTU/MRU for IP payload
+
+        $Health = Add-Health $Health 'MTU probe (DF)' ("OK (payload $pathIcmpPayload, IP MTU $pathIpMtu)") 20
+        $Health = Add-Health $Health 'Path MTU (ICMP payload)' ("$pathIcmpPayload bytes") 20.1
+        $Health = Add-Health $Health 'Recommended router MTU/MRU' ("MTU=$recommendedMtu, MRU=$recommendedMru") 20.2
+      }
     } catch {
-      $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
+      $Health = Add-Health $Health 'MTU probe (DF)' ("WARN (probe error: $($_.Exception.Message))") 20
     }
   } else {
     $Health = Add-Health $Health 'MTU probe (DF)' 'SKIP (ICMP blocked by provider)' 20
+    $Health = Add-Health $Health 'Path MTU (ICMP payload)' 'N/A' 20.1
+    $Health = Add-Health $Health 'Recommended router MTU/MRU' 'N/A' 20.2
   }
 
   # DNS Resolution Tests
@@ -597,7 +641,7 @@ function Invoke-AdvancedConnectivityChecks {
   # Burst Connectivity Test
   & $WriteLog "Testing burst connectivity..."
   $burstTest = Test-BurstConnectivity -TargetIP '1.1.1.1' -BurstSize 5 -BurstCount 3 -WriteLog $WriteLog
-  if ($burstTest -and $burstTest.AvgBurstSuccess -ne $null) {
+  if ($burstTest -and $null -ne $burstTest.AvgBurstSuccess) {
     if ($burstTest.AvgBurstSuccess -ge 90) {
       $Health = Add-Health $Health 'Burst connectivity' "OK ($($burstTest.AvgBurstSuccess)% avg success)" 27
     } elseif ($burstTest.AvgBurstSuccess -ge 70) {

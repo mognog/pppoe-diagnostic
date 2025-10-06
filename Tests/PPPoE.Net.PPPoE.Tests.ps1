@@ -119,11 +119,15 @@ try {
         }
     }
     
-    Test-Function "Connect-PPPWithFallback returns structured result" {
+    Test-Function "Connect-PPPWithFallback returns structured result (file parsing fallback)" {
         try {
             $wl = { param($m) Write-Host $m }
             $addHealth = { param($h,$n,$s,$o) return $h }
-            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "test" -Password "test" -CredentialsFile "nonexistent.ps1" -WriteLog $wl -AddHealth $addHealth
+            # Create a temp credentials file with alt variable names
+            $tmp = [System.IO.Path]::GetTempFileName()
+            Set-Content -LiteralPath $tmp -Value "`$username='user'`n`$password='pass'`n`$PPPoE_ConnectionName='TestPPPoE'" -Encoding ASCII
+            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "test" -Password "test" -CredentialsFile $tmp -WriteLog $wl -AddHealth $addHealth
+            Remove-Item $tmp -Force
             return ($result -is [hashtable] -and $result.ContainsKey('Success') -and $result.ContainsKey('CredentialSource'))
         } catch {
             return $true  # Expected to handle errors gracefully

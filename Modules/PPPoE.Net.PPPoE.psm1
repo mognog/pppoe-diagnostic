@@ -171,7 +171,44 @@ function Connect-PPPWithFallback {
         }
         & $WriteLog "FAILED: Credentials from file failed (exit code: $($result.Code))"
       } else {
-        & $WriteLog "SKIP: Credentials file exists but values are empty or invalid"
+        # Fallback parser for alternate variable names used in credentials.ps1
+        try {
+          $content = Get-Content -LiteralPath $CredentialsFile -Raw -ErrorAction Stop
+          $fileUserName = $null; $filePassword = $null; $fileConnectionName = $PppoeName
+          if ($content -match '(?im)^\s*\$PPPoE_Username\s*=\s*\"([^\"]+)\"' -or $content -match "(?im)^\s*\$PPPoE_Username\s*=\s*'([^']+)'") {
+            $fileUserName = $matches[1]
+          } elseif ($content -match '(?im)^\s*\$username\s*=\s*\"([^\"]+)\"' -or $content -match "(?im)^\s*\$username\s*=\s*'([^']+)'") {
+            $fileUserName = $matches[1]
+          }
+          if ($content -match '(?im)^\s*\$PPPoE_Password\s*=\s*\"([^\"]+)\"' -or $content -match "(?im)^\s*\$PPPoE_Password\s*=\s*'([^']+)'") {
+            $filePassword = $matches[1]
+          } elseif ($content -match '(?im)^\s*\$password\s*=\s*\"([^\"]+)\"' -or $content -match "(?im)^\s*\$password\s*=\s*'([^']+)'") {
+            $filePassword = $matches[1]
+          }
+          if ($content -match '(?im)^\s*\$PPPoE_ConnectionName\s*=\s*\"([^\"]+)\"' -or $content -match "(?im)^\s*\$PPPoE_ConnectionName\s*=\s*'([^']+)'") {
+            $fileConnectionName = $matches[1]
+          }
+          if ($fileUserName -and $filePassword) {
+            & $WriteLog "Attempt 2: Fallback parsed credentials for user '$fileUserName' on connection '$fileConnectionName'"
+            & $WriteLog "  This may take 10-30 seconds..."
+            $result = Connect-PPP -PppoeName $fileConnectionName -UserName $fileUserName -Password $filePassword
+            if ($result.Success) {
+              & $WriteLog "SUCCESS: Connected using credentials parsed from file"
+              return @{ 
+                Success = $true; 
+                Code = $result.Code; 
+                Output = $result.Output; 
+                Method = 'File'; 
+                CredentialSource = "credentials.ps1 file (parsed) for user: $fileUserName" 
+              }
+            }
+            & $WriteLog "FAILED: Parsed credentials from file failed (exit code: $($result.Code))"
+          } else {
+            & $WriteLog "SKIP: Credentials file exists but values are empty or invalid"
+          }
+        } catch {
+          & $WriteLog "SKIP: Failed to parse credentials file: $($_.Exception.Message)"
+        }
       }
     } catch {
       & $WriteLog "SKIP: Failed to load credentials from file: $($_.Exception.Message)"

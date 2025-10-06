@@ -71,12 +71,7 @@ function Write-DiagnosticConclusions {
   Write-Section "DIAGNOSTIC CONCLUSIONS"
   
   # Analyze the health results to provide clear guidance
-  $linkState = ($Health.Values | Where-Object { $_ -match 'Ethernet link state' })
-  $ontStatus = ($Health.Values | Where-Object { $_ -match 'ONT availability' })
-  $authStatus = ($Health.Values | Where-Object { $_ -match 'PPPoE authentication' })
-  $pppInterface = ($Health.Values | Where-Object { $_ -match 'PPP interface present' })
-  $connectivity = ($Health.Values | Where-Object { $_ -match 'Ping.*via PPP' })
-  $gatewayStatus = ($Health.Values | Where-Object { $_ -match 'PPP gateway assignment' })
+  # Note: Individual status variables removed as they're not used in the current logic
 
   # Extract specific keyed values we need to reason about
   $physicalAdapterKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_Physical adapter detected$' } | Select-Object -First 1)
@@ -259,6 +254,28 @@ function Write-DiagnosticConclusions {
     Write-ListItem "Check with broadband provider" 1
     Write-ListItem "This is likely a provider routing/DNS issue" 1
   }
+  elseif ($Health.Values -match '^\d{2}_MTU probe \(DF\)\s+OK.*IP MTU\s+(\d+)' -or $Health.Values -match '^\d{2}_Recommended router MTU/MRU\s+MTU=(\d+),') {
+    # Provide explicit guidance if Path MTU is below expected PPPoE 1492 or IPoE 1500
+    $recommendedKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_Recommended router MTU/MRU$' } | Select-Object -First 1)
+    if ($recommendedKey) {
+      $rec = $Health[$recommendedKey]
+      if ($rec -match 'MTU=(\d+),\s*MRU=(\d+)') {
+        $mtu = [int]$matches[1]
+        Write-Label "PATH MTU BELOW EXPECTED"
+        Write-ListItem ("Measured Path MTU suggests router MTU/MRU should be set to {0}" -f $rec) 1
+        if ($mtu -lt 1492) {
+          Write-ListItem "For PPPoE: Typical MTU is 1492 (1500-8), but your path may require lower." 1
+        } else {
+          Write-ListItem "For PPPoE: 1492 is appropriate; ensure router is set to MTU 1492 / MRU 1492." 1
+        }
+        Write-ListItem "After applying router MTU/MRU, retest stability and packet loss." 1
+      }
+    }
+  }
+  elseif ($Health.Values -match 'Ping.*via PPP.*SKIP.*ICMP blocked') {
+    # ICMP is blocked but TCP works - this is normal for many providers
+    # Don't treat this as a failure condition
+  }
   elseif ($workingComponents.Count -eq 0) {
     Write-Label "UNKNOWN ISSUE"
     Write-ListItem "Multiple components failed" 1
@@ -266,11 +283,25 @@ function Write-DiagnosticConclusions {
     Write-ListItem "May need Openreach engineer visit" 1
   }
   else {
-    Write-Label "ALL TESTS PASSED"
-    Write-ListItem "Direct ONT connection works perfectly" 1
-    Write-ListItem "Problem is likely with router or WiFi setup" 1
-    Write-ListItem "Try connecting router to same Ethernet port" 1
-    Write-ListItem "Check router configuration and WiFi settings" 1
+    # Check if ICMP is blocked but TCP works (common provider policy)
+    $icmpBlocked = ($Health.Values -match 'ICMP.*BLOCKED.*TCP works|Ping.*SKIP.*ICMP blocked')
+    $tcpWorks = ($Health.Values -match 'TCP connectivity.*OK')
+    
+    if ($icmpBlocked -and $tcpWorks) {
+      Write-Label "CONNECTION WORKING (ICMP BLOCKED BY PROVIDER)"
+      Write-ListItem "Direct ONT connection works perfectly" 1
+      Write-ListItem "TCP connectivity confirmed - internet access is functional" 1
+      Write-ListItem "ICMP/ping is blocked by provider (this is normal)" 1
+      Write-ListItem "Problem is likely with router or WiFi setup" 1
+      Write-ListItem "Try connecting router to same Ethernet port" 1
+      Write-ListItem "Check router configuration and WiFi settings" 1
+    } else {
+      Write-Label "ALL TESTS PASSED"
+      Write-ListItem "Direct ONT connection works perfectly" 1
+      Write-ListItem "Problem is likely with router or WiFi setup" 1
+      Write-ListItem "Try connecting router to same Ethernet port" 1
+      Write-ListItem "Check router configuration and WiFi settings" 1
+    }
   }
 }
 

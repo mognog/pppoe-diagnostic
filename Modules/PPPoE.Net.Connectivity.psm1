@@ -192,7 +192,7 @@ function Test-ConnectionJitter {
       $ping = Test-Connection -TargetName $TargetIP -Count 1 -TimeoutSeconds 2 -ErrorAction Stop
       if ($ping -and $ping.ResponseTime) {
         $results += @{ Packet = $i; Latency = $ping.ResponseTime; Success = $true }
-        & $WriteLog "Packet $($i): OK (${ping.ResponseTime}ms)"
+        & $WriteLog "Packet $($i): OK ($($ping.ResponseTime)ms)"
       }
     } catch {
       $results += @{ Packet = $i; Latency = $null; Success = $false }
@@ -212,7 +212,7 @@ function Test-ConnectionJitter {
     $maxLatency = ($latencies | Measure-Object -Maximum).Maximum
     $jitter = $maxLatency - $minLatency
     
-    & $WriteLog "Jitter test complete: $successful/$Count packets received, avg: ${avgLatency}ms, jitter: ${jitter}ms (min: ${minLatency}ms, max: ${maxLatency}ms)"
+    & $WriteLog "Jitter test complete: $successful/$Count packets received, avg: $($avgLatency)ms, jitter: $($jitter)ms (min: $($minLatency)ms, max: $($maxLatency)ms)"
     
     return @{
       TotalPackets = $Count;
@@ -375,8 +375,8 @@ function Test-ProviderSpecificDiagnostics {
       $ping = Test-Connection -TargetName $endpoint.IP -Count 2 -TimeoutSeconds 1 -ErrorAction Stop
       if ($ping) {
         $avgLatency = [Math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average, 1)
-        $diagnostics += @{ Test = "Connectivity-$($endpoint.Name)"; Status = "OK"; Result = "Avg latency: ${avgLatency}ms" }
-        & $WriteLog "  $($endpoint.Name) ($($endpoint.IP)): OK (${avgLatency}ms avg)"
+        $diagnostics += @{ Test = "Connectivity-$($endpoint.Name)"; Status = "OK"; Result = "Avg latency: $($avgLatency)ms" }
+        & $WriteLog "  $($endpoint.Name) ($($endpoint.IP)): OK ($($avgLatency)ms avg)"
       }
     } catch {
       $diagnostics += @{ Test = "Connectivity-$($endpoint.Name)"; Status = "FAIL"; Result = "Connection failed" }
@@ -511,9 +511,9 @@ function Test-IPv6FallbackDelay {
         $ipv6Time = $sw.ElapsedMilliseconds
         
         if ($ipv6Success) {
-          & $WriteLog "  IPv6 connection: SUCCESS (${ipv6Time}ms)"
+          & $WriteLog "  IPv6 connection: SUCCESS ($($ipv6Time)ms)"
         } else {
-          & $WriteLog "  IPv6 connection: FAILED (${ipv6Time}ms) - will fallback to IPv4"
+          & $WriteLog "  IPv6 connection: FAILED ($($ipv6Time)ms) - will fallback to IPv4"
         }
       } else {
         & $WriteLog "  No IPv6 addresses found - direct IPv4 fallback"
@@ -534,9 +534,9 @@ function Test-IPv6FallbackDelay {
       $ipv4FallbackTime = $sw.ElapsedMilliseconds
       
       if ($ipv4Success) {
-        & $WriteLog "  IPv4 fallback: SUCCESS (${ipv4FallbackTime}ms)"
+        & $WriteLog "  IPv4 fallback: SUCCESS ($($ipv4FallbackTime)ms)"
       } else {
-        & $WriteLog "  IPv4 fallback: FAILED (${ipv4FallbackTime}ms)"
+        & $WriteLog "  IPv4 fallback: FAILED ($($ipv4FallbackTime)ms)"
       }
       
       # Calculate delay
@@ -556,7 +556,7 @@ function Test-IPv6FallbackDelay {
         IPv6Overhead = $ipv6Overhead
       }
       
-      & $WriteLog "  Summary: Total delay ${totalDelay}ms, IPv6 overhead ${ipv6Overhead}ms"
+      & $WriteLog "  Summary: Total delay $($totalDelay)ms, IPv6 overhead $($ipv6Overhead)ms"
       
     } catch {
       & $WriteLog "  Error testing $($testHost.Name): $($_.Exception.Message)"
@@ -593,8 +593,8 @@ function Test-IPv6FallbackDelay {
   } else { 0 }
   
   & $WriteLog "IPv6 Fallback Analysis:"
-  & $WriteLog "  Average total delay: ${avgDelay}ms"
-  & $WriteLog "  Average IPv6 overhead: ${avgIPv6Overhead}ms"
+  & $WriteLog "  Average total delay: $($avgDelay)ms"
+  & $WriteLog "  Average IPv6 overhead: $($avgIPv6Overhead)ms"
   & $WriteLog "  Services with IPv6 failures: $ipv6Failures/$($testHosts.Count)"
   
   if ($avgIPv6Overhead -gt 1000) {
@@ -655,7 +655,7 @@ function Test-ConnectionEstablishmentSpeed {
           $connectionTime = $sw.ElapsedMilliseconds
           $connectionTimes += $connectionTime
           $successCount++
-          & $WriteLog "  Attempt $i`: SUCCESS (${connectionTime}ms)"
+          & $WriteLog "  Attempt $i`: SUCCESS ($($connectionTime)ms)"
         } else {
           $failureCount++
           & $WriteLog "  Attempt $i`: FAILED (connection not established)"
@@ -666,7 +666,7 @@ function Test-ConnectionEstablishmentSpeed {
         $sw.Stop()
         $connectionTime = $sw.ElapsedMilliseconds
         $failureCount++
-        & $WriteLog "  Attempt $i`: FAILED (${connectionTime}ms) - $($_.Exception.Message)"
+        & $WriteLog "  Attempt $i`: FAILED ($($connectionTime)ms) - $($_.Exception.Message)"
       }
       
       Start-Sleep -Milliseconds 200
@@ -699,7 +699,7 @@ function Test-ConnectionEstablishmentSpeed {
       ConnectionTimes = $connectionTimes
     }
     
-    & $WriteLog "  Summary: $successRate% success rate, avg ${avgTime}ms (range: ${minTime}-${maxTime}ms)"
+    & $WriteLog "  Summary: $successRate% success rate, avg $($avgTime)ms (range: $($minTime)-$($maxTime)ms)"
     
     # Classify performance
     if ($successRate -eq 100 -and $avgTime -lt 1000) {
@@ -720,13 +720,13 @@ function Test-ConnectionEstablishmentSpeed {
   
   & $WriteLog "Connection Establishment Speed Analysis:"
   & $WriteLog "  Overall success rate: $overallSuccessRate%"
-  & $WriteLog "  Overall average time: ${overallAvgTime}ms"
+  & $WriteLog "  Overall average time: $($overallAvgTime)ms"
   & $WriteLog "  Problematic services: $($problematicServices.Count)/$($streamingServices.Count)"
   
   if ($problematicServices.Count -gt 0) {
     & $WriteLog "  Services with issues:"
     foreach ($service in $problematicServices) {
-      & $WriteLog "    - $($service.Service): $($service.SuccessRate)% success, ${service.AverageTime}ms avg"
+      & $WriteLog "    - $($service.Service): $($service.SuccessRate)% success, $($service.AverageTime)ms avg"
     }
   }
   
@@ -771,7 +771,7 @@ function Test-ICMPRateLimiting {
         $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
         $burstResults += @{ Packet = $i; Success = $true; Latency = $latency }
         $burstSuccess++
-        & $WriteLog "  Burst ping $i`: SUCCESS (${latency}ms)"
+        & $WriteLog "  Burst ping $i`: SUCCESS ($($latency)ms)"
       } else {
         $burstResults += @{ Packet = $i; Success = $false; Latency = $null }
         & $WriteLog "  Burst ping $i`: FAILED"
@@ -801,7 +801,7 @@ function Test-ICMPRateLimiting {
         $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
         $sustainedResults += @{ Packet = $i; Success = $true; Latency = $latency }
         $sustainedSuccess++
-        & $WriteLog "  Sustained ping $i`: SUCCESS (${latency}ms)"
+        & $WriteLog "  Sustained ping $i`: SUCCESS ($($latency)ms)"
       } else {
         $sustainedResults += @{ Packet = $i; Success = $false; Latency = $null }
         & $WriteLog "  Sustained ping $i`: FAILED"
@@ -826,7 +826,7 @@ function Test-ICMPRateLimiting {
     if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
       $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
       $singleSuccess = $true
-      & $WriteLog "Single ping: SUCCESS (${latency}ms)"
+      & $WriteLog "Single ping: SUCCESS ($($latency)ms)"
     } else {
       & $WriteLog "Single ping: FAILED"
     }
@@ -867,8 +867,8 @@ function Test-ICMPRateLimiting {
   } else { 0 }
   
   & $WriteLog "ICMP Rate Limiting Analysis:"
-  & $WriteLog "  Burst success rate: $burstSuccessRate% (avg latency: ${burstAvgLatency}ms)"
-  & $WriteLog "  Sustained success rate: $sustainedSuccessRate% (avg latency: ${sustainedAvgLatency}ms)"
+  & $WriteLog "  Burst success rate: $burstSuccessRate% (avg latency: $($burstAvgLatency)ms)"
+  & $WriteLog "  Sustained success rate: $sustainedSuccessRate% (avg latency: $($sustainedAvgLatency)ms)"
   & $WriteLog "  Single ping success: $(if ($singleSuccess) { 'YES' } else { 'NO' })"
   & $WriteLog "  Rate limiting detected: $(if ($rateLimitingDetected) { 'YES' } else { 'NO' })"
   
@@ -1132,9 +1132,9 @@ function Test-DNSServerPerformance {
           
           if ($responseTime -gt 500) {
             $slowQueries++
-            & $WriteLog "  $($domain.Name) ($($domain.Domain)): SLOW (${responseTime}ms)"
+            & $WriteLog "  $($domain.Name) ($($domain.Domain)): SLOW ($($responseTime)ms)"
           } else {
-            & $WriteLog "  $($domain.Name) ($($domain.Domain)): OK (${responseTime}ms)"
+            & $WriteLog "  $($domain.Name) ($($domain.Domain)): OK ($($responseTime)ms)"
           }
           
           $serverResults += @{
@@ -1194,7 +1194,7 @@ function Test-DNSServerPerformance {
       DomainResults = $serverResults
     }
     
-    & $WriteLog "  Summary: $successRate% success, ${avgResponseTime}ms avg, $slowQueries slow queries"
+    & $WriteLog "  Summary: $successRate% success, $($avgResponseTime)ms avg, $slowQueries slow queries"
     
     # Classify performance
     if ($successRate -eq 100 -and $avgResponseTime -lt 100) {
@@ -1230,7 +1230,7 @@ function Test-DNSServerPerformance {
   } else { 0 }
   
   & $WriteLog "DNS Server Performance Analysis:"
-  & $WriteLog "  Overall average response time: ${overallAvgTime}ms"
+  & $WriteLog "  Overall average response time: $($overallAvgTime)ms"
   & $WriteLog "  Overall success rate: $overallSuccessRate%"
   
   if ($bestServer -and $bestServer.PSObject.Properties['DNSServer'] -and $bestServer.PSObject.Properties['AverageResponseTime']) {
@@ -1315,7 +1315,7 @@ function Test-SustainedConnection {
       $connectionTime = $sw.ElapsedMilliseconds
       
       if ($tcpClient.Connected) {
-        & $WriteLog "  Connection established: ${connectionTime}ms"
+        & $WriteLog "  Connection established: $($connectionTime)ms"
         
         # Monitor connection for sustained period
         $startTime = Get-Date
@@ -1444,7 +1444,7 @@ function Test-SustainedConnection {
   
   & $WriteLog "Sustained Connection Analysis:"
   & $WriteLog "  Average stability: $avgStability%"
-  & $WriteLog "  Average connection time: ${avgConnectionTime}ms"
+  & $WriteLog "  Average connection time: $($avgConnectionTime)ms"
   & $WriteLog "  Stable connections: $($stableConnections.Count)/$($streamingServices.Count)"
   & $WriteLog "  Failed/problematic connections: $($failedConnections.Count)/$($streamingServices.Count)"
   
@@ -1510,7 +1510,7 @@ function Test-LargePacketHandling {
       if ($ping -and ($ping.PSObject.Properties['ResponseTime'] -or $ping.PSObject.Properties['Latency'])) {
         $success = $true
         $latency = if ($ping.PSObject.Properties['ResponseTime']) { $ping.ResponseTime } else { $ping.Latency }
-        & $WriteLog "  $size bytes: SUCCESS (${latency}ms)"
+        & $WriteLog "  $size bytes: SUCCESS ($($latency)ms)"
       } else {
         $errorMessage = "No response received"
         & $WriteLog "  $size bytes: FAILED - No response"
@@ -1970,7 +1970,7 @@ function Test-BandwidthConsistencyAnalysis {
         $sampleResult.BytesDownloaded = $bytesDownloaded
         $sampleResult.Success = $true
         
-        & $WriteLog "  Download: ${downloadSpeedMbps} Mbps (${downloadTimeMs}ms, ${bytesDownloaded} bytes)"
+        & $WriteLog "  Download: ${downloadSpeedMbps} Mbps ($($downloadTimeMs)ms, $($bytesDownloaded) bytes)"
       } else {
         $sampleResult.Error = "Invalid response: Status $($response.StatusCode)"
         & $WriteLog "  Download: FAILED - Invalid response"
@@ -2182,7 +2182,7 @@ function Test-PortExhaustionDetectionQuick {
     $targetPort = 443
     $timeout = $connectionTimeout
     
-    $task = [System.Threading.Tasks.Task]::Run({
+    $task = [System.Threading.Tasks.Task]::Run([System.Func[System.Object]]{
       $th = $using:targetHost
       $tp = $using:targetPort
       $to = $using:timeout
