@@ -36,6 +36,30 @@ function Write-HealthSummary {
   $hasWarn = ($Health.Values | Where-Object { $_ -match 'WARN' })
   $overall = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
   Write-Log ("OVERALL: {0}" -f $overall)
+
+  # Concise per-tier summary (PASS/FAIL/INFO)
+  try {
+    Write-Blank
+    Write-Log "--- TIER SUMMARY ---"
+    $tiers = @(
+      @{ Name = 'System';      Keys = @('PowerShell version','Physical adapter detected','Ethernet link state','Adapter driver','ONT management') },
+      @{ Name = 'PPP/Auth';    Keys = @('Credentials source','PPPoE authentication','PPP interface present','PPP IPv4 assignment') },
+      @{ Name = 'Routing';     Keys = @('Default route via PPP','PPP gateway assignment','Gateway reachability') },
+      @{ Name = 'Connectivity';Keys = @('Ping (1.1.1.1) via PPP','Ping (8.8.8.8) via PPP','TCP connectivity','Multi-destination routing','Windows Firewall','MTU probe (DF)') }
+    )
+
+    foreach ($tier in $tiers) {
+      $values = @()
+      foreach ($k in $Health.Keys) {
+        $displayKey = $k -replace '^\d{2}_',''
+        if ($tier.Keys -contains $displayKey) { $values += $Health[$k] }
+      }
+      if ($values.Count -gt 0) {
+        $tierStatus = if ($values -match 'FAIL') { 'FAIL' } elseif ($values -match 'WARN') { 'WARN' } elseif ($values -match 'INFO|SKIP|N/A') { 'INFO' } else { 'PASS' }
+        Write-Log ("{0}: {1}" -f $tier.Name, $tierStatus)
+      }
+    }
+  } catch { }
   
   # Add diagnostic conclusions
   Write-DiagnosticConclusions -Health $Health
@@ -58,8 +82,9 @@ function Write-DiagnosticConclusions {
   $physicalAdapterKey = ($Health.Keys | Where-Object { $_ -match '^\d{2}_Physical adapter detected$' } | Select-Object -First 1)
   $physicalAdapterValue = if ($physicalAdapterKey) { $Health[$physicalAdapterKey] } else { $null }
   
-  # CRITICAL: Check for 0.0.0.0 gateway issue (IPCP negotiation failure)
-  $zeroGatewayIssue = $Health.Values -match '0\.0\.0\.0|Gateway.*ERROR|Gateway.*unspecified'
+  # Provider-agnostic policy: do not treat 0.0.0.0/unspecified gateway as a critical issue
+  # We rely on the presence of a usable default route instead.
+  $zeroGatewayIssue = $false
   
   # Check what's working
   $workingComponents = @()
@@ -83,13 +108,7 @@ function Write-DiagnosticConclusions {
   }
   
   # Identify problem areas (check in order of precedence)
-  # CRITICAL: 0.0.0.0 Gateway is highest priority issue
-  if ($zeroGatewayIssue) {
-    $problemAreas += "*** CRITICAL: IPCP Gateway Negotiation Failure (0.0.0.0 gateway) ***"
-    $problemAreas += "Provider PPPoE server not providing default gateway"
-    $problemAreas += "This prevents normal internet browsing and streaming"
-  }
-  elseif ($Health.Values -match 'FAIL.*Down') { 
+  if ($Health.Values -match 'FAIL.*Down') { 
     $problemAreas += "Ethernet cable or connection" 
   }
   elseif ($Health.Values -match 'WARN.*No ONTs reachable') { 

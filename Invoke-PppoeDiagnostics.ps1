@@ -9,7 +9,9 @@ param(
   [string]$TargetAdapter,
   [switch]$FullLog,
   [switch]$SkipWifiToggle,
-  [switch]$KeepPPP
+  [switch]$KeepPPP,
+  [ValidateSet('Quick','Standard','ISPEvidence')][string]$Profile = 'Standard',
+  [ValidateSet('On','Evidence')][string]$Privacy = 'On'
 )
 
 #Set-StrictMode -Version 3.0
@@ -41,7 +43,8 @@ try {
   Show-Banner
   Write-Log "PowerShell version: $($PSVersionTable.PSVersion)"
   Write-Log "Script path: $($MyInvocation.MyCommand.Path)"
-  Write-Log "Parameters: PppoeName=$PppoeName, TargetAdapter=$TargetAdapter, FullLog=$FullLog, SkipWifiToggle=$SkipWifiToggle, KeepPPP=$KeepPPP"
+  Set-PrivacyMode -Mode $Privacy
+  Write-Log "Parameters: PppoeName=$PppoeName, TargetAdapter=$TargetAdapter, FullLog=$FullLog, SkipWifiToggle=$SkipWifiToggle, KeepPPP=$KeepPPP, Profile=$Profile, Privacy=$Privacy"
 
   # Show available credential sources
   Show-CredentialSources -WriteLog ${function:Write-Log}
@@ -60,7 +63,7 @@ try {
   }
 
   # Execute the main diagnostic workflow
-  $result = Invoke-PPPoEDiagnosticWorkflow -PppoeName $PppoeName -UserName $UserName -Password $Password -TargetAdapter $TargetAdapter -FullLog:$FullLog -SkipWifiToggle:$SkipWifiToggle -KeepPPP:$KeepPPP -WriteLog ${function:Write-Log}
+  $result = Invoke-PPPoEDiagnosticWorkflow -PppoeName $PppoeName -UserName $UserName -Password $Password -TargetAdapter $TargetAdapter -FullLog:$FullLog -SkipWifiToggle:$SkipWifiToggle -KeepPPP:$KeepPPP -WriteLog ${function:Write-Log} -Profile $Profile
 
   # Store cleanup information from workflow
   if ($result -and $result.DisabledWiFiAdapters) {
@@ -80,9 +83,7 @@ try {
     if ($result.PPPInterface) {
       Write-Log "PPP interface: $($result.PPPInterface.InterfaceAlias)"
     }
-    if ($result.PPPIP) {
-      Write-Log "PPP IP address: $($result.PPPIP.IPAddress)"
-    }
+    if ($result.PPPIP) { Write-Log ("PPP IP address: {0}" -f (Describe-IPv4ForLog $result.PPPIP.IPAddress)) }
   } else {
     Write-Log "Diagnostic failed - no results available"
   }

@@ -11,7 +11,8 @@ function Invoke-PPPoEDiagnosticWorkflow {
     [switch]$FullLog,
     [switch]$SkipWifiToggle,
     [switch]$KeepPPP,
-    [scriptblock]$WriteLog
+    [scriptblock]$WriteLog,
+    [ValidateSet('Quick','Standard','ISPEvidence')][string]$Profile = 'Standard'
   )
   
   # Initialize health tracking
@@ -29,6 +30,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
     $disabledWiFiAdapters = Disable-WiFiAdapters -WriteLog $WriteLog
     if ($disabledWiFiAdapters -and $disabledWiFiAdapters -is [array] -and $disabledWiFiAdapters.Count -gt 0) {
       & $WriteLog "Temporarily disabled $($disabledWiFiAdapters.Count) WiFi adapter(s) to prevent interference"
+      & $WriteLog "INFO: Wi-Fi temporarily disabled for clean PPPoE test; will be re-enabled at end."
     } else {
       & $WriteLog "No WiFi adapters were active or found"
     }
@@ -40,6 +42,14 @@ function Invoke-PPPoEDiagnosticWorkflow {
   & $WriteLog "Disconnecting any existing PPPoE connections..."
   Disconnect-AllPPPoE
   & $WriteLog "Cleanup complete."
+
+  # Set privacy mode based on profile (Evidence for ISPEvidence, On otherwise)
+  try {
+    if (Get-Command Set-PrivacyMode -ErrorAction SilentlyContinue) {
+      if ($Profile -eq 'ISPEvidence') { Set-PrivacyMode -Mode 'Evidence' } else { Set-PrivacyMode -Mode 'On' }
+      & $WriteLog ("Privacy mode: {0}" -f (if ($Profile -eq 'ISPEvidence') { 'Evidence' } else { 'On' }))
+    }
+  } catch {}
 
   # Phase 1: Basic System Checks
   & $WriteLog ""
@@ -62,7 +72,7 @@ function Invoke-PPPoEDiagnosticWorkflow {
   & $WriteLog ""
   & $WriteLog "=== NETWORK ADAPTER CHECKS ==="
   & $WriteLog "Scanning for Ethernet adapters and checking link status..."
-  $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog
+  $adapterChecks = Invoke-NetworkAdapterChecks -Health $Health -TargetAdapter $TargetAdapter -WriteLog $WriteLog -Profile $Profile
   
   # Handle null or malformed return from health check function
   if ($adapterChecks -is [hashtable] -and $adapterChecks.ContainsKey('Health')) {
@@ -140,31 +150,35 @@ function Invoke-PPPoEDiagnosticWorkflow {
         & $WriteLog ""
         & $WriteLog "=== ENHANCED CONNECTIVITY DIAGNOSTICS ==="
         & $WriteLog "Running advanced tests to detect specific network issues..."
-        $Health = Invoke-EnhancedConnectivityDiagnostics -Health $Health -WriteLog $WriteLog
+        if ($Profile -ne 'Quick') {
+          $Health = Invoke-EnhancedConnectivityDiagnostics -Health $Health -WriteLog $WriteLog
+        } else {
+          $Health = Add-Health $Health 'Enhanced Diagnostics' 'SKIP (Quick profile)' 55
+        }
 
         # Phase 6: Advanced Connectivity Tests
-        if ($FullLog) {
+        if ($Profile -eq 'ISPEvidence') {
           & $WriteLog ""
           & $WriteLog "=== ADVANCED CONNECTIVITY TESTS ==="
           $Health = Invoke-AdvancedConnectivityChecks -Health $Health -PPPInterface $pppInterface -WriteLog $WriteLog
         }
 
         # Phase 7: Traceroute Diagnostics
-        if ($FullLog) {
+        if ($Profile -eq 'ISPEvidence') {
           & $WriteLog ""
           & $WriteLog "=== TRACEROUTE DIAGNOSTICS ==="
           $Health = Invoke-TracerouteDiagnostics -Health $Health -WriteLog $WriteLog
         }
 
         # Phase 8: Optional Stability Test
-        if ($FullLog) {
+        if ($Profile -eq 'ISPEvidence') {
           & $WriteLog ""
           & $WriteLog "=== OPTIONAL STABILITY TEST ==="
           $Health = Invoke-OptionalStabilityTest -Health $Health -WriteLog $WriteLog
         }
 
         # Phase 9: Advanced Streaming Diagnostics (Full Log Only)
-        if ($FullLog) {
+        if ($Profile -eq 'ISPEvidence') {
           & $WriteLog ""
           & $WriteLog "=== ADVANCED STREAMING DIAGNOSTICS ==="
           $Health = Invoke-AdvancedStreamingDiagnostics -Health $Health -WriteLog $WriteLog
@@ -172,6 +186,54 @@ function Invoke-PPPoEDiagnosticWorkflow {
       }
     } else {
       # Link is up but authentication failed
+      # Provide fail-fast, friendly guidance based on rasdial exit code
+      & $WriteLog ""
+      Write-Section "AUTHENTICATION FAILED"
+      $code = if ($connectionResult) { $connectionResult.Code } else { $null }
+      switch ($code) {
+        691 {
+          Write-Label "LIKELY CAUSE"
+          Write-ListItem "Incorrect broadband username or password (Error 691)" 1
+          Write-Blank
+          Write-Label "WHAT TO DO"
+          Write-ListItem "Check credentials in credentials.ps1 or Windows saved credentials" 1
+          Write-ListItem "Try running with -UserName and -Password parameters to confirm" 1
+          Write-ListItem "Contact your provider to verify account status" 1
+        }
+        651 {
+          Write-Label "LIKELY CAUSE"
+          Write-ListItem "Device/link error or no physical PPPoE signal (Error 651)" 1
+          Write-Blank
+          Write-Label "WHAT TO DO"
+          Write-ListItem "Check Ethernet link to ONT; verify LEDs" 1
+          Write-ListItem "Restart the 'RasMan' service: Restart-Service RasMan -Force" 1
+          Write-ListItem "Recreate the PPPoE connection if problem persists" 1
+        }
+        619 {
+          Write-Label "LIKELY CAUSE"
+          Write-ListItem "Port disconnected or session dropped during connect (Error 619)" 1
+          Write-Blank
+          Write-Label "WHAT TO DO"
+          Write-ListItem "Wait 60 seconds and retry; provider may rate-limit new sessions" 1
+          Write-ListItem "Power-cycle ONT if frequent" 1
+        }
+        678 {
+          Write-Label "LIKELY CAUSE"
+          Write-ListItem "No answer from remote/BNG (Error 678)" 1
+          Write-Blank
+          Write-Label "WHAT TO DO"
+          Write-ListItem "Check provider network status; try again later" 1
+          Write-ListItem "If persistent, report outage with timestamps" 1
+        }
+        default {
+          Write-Label "AUTH ERROR"
+          Write-ListItem ("rasdial returned error code: {0}" -f (if ($code -ne $null) { $code } else { 'unknown' })) 1
+          if ($connectionResult -and $connectionResult.Output) {
+            Write-ListItem "See rasdial output above for details" 1
+          }
+        }
+      }
+
       $Health = Add-Health $Health 'PPP interface present' 'N/A' 13
       $Health = Add-Health $Health 'PPP IPv4 assignment' 'N/A' 14
       $Health = Add-Health $Health 'Default route via PPP' 'N/A' 15

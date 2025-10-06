@@ -57,7 +57,7 @@ try {
     
     Test-Function "Credential functions handle special characters safely" {
         try {
-            $specialPassword = "Pass!@#$%^&*()_+-=[]{}|;':\",./<>?`~"
+            $specialPassword = 'Pass!@#$%^&*()_+-=[]{}|;'':",./<>?`~'
             $result = Test-CredentialsFormat -UserName "testuser" -Password $specialPassword
             return ($result -is [object])
         } catch {
@@ -112,7 +112,7 @@ try {
         try {
             $pathTraversal = "../../../etc/passwd"
             $result = Import-Configuration -ConfigPath $pathTraversal
-            return ($result -eq $null)  # Should return null for invalid paths
+            return ($null -eq $result)  # Should return null for invalid paths
         } catch {
             return $true  # Expected to handle path traversal
         }
@@ -122,7 +122,7 @@ try {
         try {
             $uncPath = "\\server\share\config.json"
             $result = Import-Configuration -ConfigPath $uncPath
-            return ($result -eq $null)  # Should return null for UNC paths
+            return ($null -eq $result)  # Should return null for UNC paths
         } catch {
             return $true  # Expected to handle UNC paths
         }
@@ -133,7 +133,7 @@ try {
         try {
             # Test with a file that might not exist or be accessible
             $result = Import-Configuration -ConfigPath "C:\Windows\System32\config\SAM"
-            return ($result -eq $null)  # Should return null for system files
+            return ($null -eq $result)  # Should return null for system files
         } catch {
             return $true  # Expected to handle permission errors
         }
@@ -185,7 +185,7 @@ try {
             $result = Import-Configuration -ConfigPath $tempFile
             Remove-Item $tempFile -Force
             
-            return ($result -is [object] -or $result -eq $null)
+            return ($result -is [object] -or $null -eq $result)
         } catch {
             return $true  # Expected to handle malicious JSON
         }
@@ -195,7 +195,7 @@ try {
     Test-Function "Credential source functions handle invalid sources safely" {
         try {
             $result = Get-CredentialSource -UserName "test" -Password "test"
-            return ($result -is [string] -or $result -eq $null)
+            return ($result -is [string] -or $null -eq $result)
         } catch {
             return $false
         }

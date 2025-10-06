@@ -1,27 +1,34 @@
+# Rules
+- Keep this roadmap current: tick off items as soon as they’re completed.
+- Skim `TIPS.md` before changes for style, patterns, and guardrails.
+- Use quick smoke tests to validate edits: run `.\Tests\Run-Tests-Fast.ps1`.
+- Prefer minimal/noise logging; privacy defaults to ON unless Evidence is required.
+- When unsure, add a short note next to the item explaining the decision.
+
 ## PPPoE Diagnostic – Provider-Agnostic Roadmap
 
 Status legend: [ ] pending · [~] in progress · [x] completed · [-] cancelled
 
 ### Profiles & Privacy
 - [~] Add diagnostic profiles Quick/Standard/ISP Evidence and wire flags
-- [ ] Implement privacy modes (ON/Evidence) and redaction rules in logging
+- [x] Implement privacy modes (ON/Evidence) and redaction rules in logging
 
 ### Optionalization & Noise Trimming
 - [ ] Make ONT web UI probing optional; keep LED prompt only
 - [ ] Clarify Wi‑Fi disable log message and keep behavior
- - [ ] Move deep IPv6/streaming tests to optional ISP Evidence pack
+
 
 ### Core Signal & Provider-Agnostic Fixes
-- [ ] Treat 0.0.0.0 gateway as normal; rely on default route presence
+- [x] Treat 0.0.0.0 gateway as normal; rely on default route presence
 - [x] Bind ICMP/traceroute to PPP IfIndex; skip ICMP tests when ICMP is blocked
 - [ ] Fail-fast on RasDial authentication errors with friendly messages
-- [ ] Use neutral labels for DNS; remove provider names from logs
-- [ ] Detect CGNAT (100.64.0.0/10) and log as INFO (not error)
+- [x] Use neutral labels for DNS; remove provider names from logs
+- [x] Detect CGNAT (100.64.0.0/10) and log as INFO (not error)
 - [ ] Simplify ladder and introduce clear stop-conditions per tier
 
 ### Health Summary & UX
-- [ ] Health summary: one concise line per tier (PASS/FAIL/INFO)
-- [ ] If ICMP and TCP disagree, add INFO note preferring TCP checks
+- [x] Health summary: one concise line per tier (PASS/FAIL/INFO)
+- [x] If ICMP and TCP disagree, add INFO note preferring TCP checks
 - [ ] Ensure always-on logging with safe fields only (see table below)
 
 ### Logging Privacy Policy (target)
@@ -40,6 +47,7 @@ Privacy: Evidence mode may expose full PPP IP (optional last-octet mask) and ful
 - [x] Early ICMP detection added; ICMP-based tests skipped when TCP works (provider‑agnostic gating)
 - [x] Added Quick Stability Suite with summarized evidence; integrated into workflow without noisy logs
 - [x] Hardened Count/Error handling in diagnostics; fixed a Task.Run closure misuse
+- [~] Profile and privacy plumbing added (flags + redaction helpers wired)
 
 ---
 

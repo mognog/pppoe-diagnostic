@@ -20,7 +20,15 @@ function Stop-AsciiTranscript {
 function Write-Log {
   param([string]$Message)
   $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-  $line = "[{0}] {1}" -f $ts, ($Message -replace '[^\x00-\x7F]', '?')
+  try {
+    $msg = ($Message -replace '[^\x00-\x7F]', '?')
+    if (Get-Command Protect-LogText -ErrorAction SilentlyContinue) {
+      $msg = Protect-LogText -Text $msg
+    }
+    $line = "[{0}] {1}" -f $ts, $msg
+  } catch {
+    $line = "[{0}] {1}" -f $ts, ($Message -replace '[^\x00-\x7F]', '?')
+  }
   if ($script:_TranscriptWriter) { $script:_TranscriptWriter.WriteLine($line) }
   Write-Host $line
 }

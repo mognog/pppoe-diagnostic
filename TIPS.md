@@ -62,6 +62,16 @@ pause >nul
 (Get-Content file.ps1 -Raw) -replace "`n", "`r`n" | Set-Content file-fixed.ps1
 ```
 
+### Quoting strings with special characters (PowerShell)
+```powershell
+# Prefer single quotes to avoid interpolation; escape a single quote by doubling it
+$specialPassword = 'Pass!@#$%^&*()_+-=[]{}|;'' :",./<>?`~'
+
+# Notes:
+# - Inside single quotes, the backtick (`) is literal; no need to escape it for content.
+# - Double quotes require escaping of embedded characters and interpolation rules.
+```
+
 ### Module Loading
 ```powershell
 # These work reliably:

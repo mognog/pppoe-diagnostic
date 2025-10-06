@@ -87,7 +87,8 @@ function Invoke-NetworkAdapterChecks {
   param(
     [hashtable]$Health,
     [string]$TargetAdapter,
-    [scriptblock]$WriteLog
+    [scriptblock]$WriteLog,
+    [ValidateSet('Quick','Standard','ISPEvidence')][string]$DiagProfile = 'Standard'
   )
   
   # [3] NIC selection
@@ -148,11 +149,15 @@ function Invoke-NetworkAdapterChecks {
     }
     
     # [4.3] ONT Management Interface Check (optional - many ONTs don't expose this)
-    $ontStatus = Test-ONTAvailability -WriteLog $WriteLog
-    if ($ontStatus.Status -eq "OK") {
-      $Health = Add-Health $Health 'ONT management' "OK ($($ontStatus.ReachableONTs.Count) accessible)" 4.3
+    if ($DiagProfile -eq 'ISPEvidence') {
+      $ontStatus = Test-ONTAvailability -WriteLog $WriteLog
+      if ($ontStatus.Status -eq "OK") {
+        $Health = Add-Health $Health 'ONT management' "OK ($($ontStatus.ReachableONTs.Count) accessible)" 4.3
+      } else {
+        $Health = Add-Health $Health 'ONT management' 'INFO (Not accessible - check LED status)' 4.3
+      }
     } else {
-      $Health = Add-Health $Health 'ONT management' 'INFO (Not accessible - check LED status)' 4.3
+      $Health = Add-Health $Health 'ONT management' 'INFO (Please visually confirm ONT LEDs indicate link/activity)' 4.3
     }
     
     # [4.4] ONT LED Reminder
@@ -265,7 +270,12 @@ function Invoke-PPPInterfaceChecks {
       # [14] PPP IPv4 Assignment
       $pppIP = Get-PppIPv4 -IfIndex $pppIf.InterfaceIndex
       if ($pppIP) {
-        $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))") 14
+        try {
+          $ipDesc = if (Get-Command Get-IPv4LogDescription -ErrorAction SilentlyContinue) { Get-IPv4LogDescription -IPv4 $pppIP.IPAddress } else { $pppIP.IPAddress }
+          $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($ipDesc/$($pppIP.PrefixLength))") 14
+        } catch {
+          $Health = Add-Health $Health 'PPP IPv4 assignment' ("OK ($($pppIP.IPAddress)/$($pppIP.PrefixLength))") 14
+        }
       } else {
         $Health = Add-Health $Health 'PPP IPv4 assignment' ("FAIL (no non-APIPA IPv4)") 14
       }
@@ -298,12 +308,12 @@ function Invoke-PPPInterfaceChecks {
       if ($gatewayInfo) {
         switch ($gatewayInfo.Status) {
           "OK" { $Health = Add-Health $Health 'PPP gateway assignment' "OK ($($gatewayInfo.Gateway))" 15.2 }
-          "NO_GATEWAY" { $Health = Add-Health $Health 'PPP gateway assignment' 'FAIL (No gateway assigned)' 15.2 }
+          "NO_GATEWAY" { $Health = Add-Health $Health 'PPP gateway assignment' 'INFO (Gateway unspecified; using default route presence)' 15.2 }
           "FAIL" { $Health = Add-Health $Health 'PPP gateway assignment' "FAIL (Gateway unreachable: $($gatewayInfo.Gateway))" 15.2 }
           default { $Health = Add-Health $Health 'PPP gateway assignment' "WARN ($($gatewayInfo.Status))" 15.2 }
         }
       } else {
-        $Health = Add-Health $Health 'PPP gateway assignment' 'FAIL (Could not retrieve gateway info)' 15.2
+        $Health = Add-Health $Health 'PPP gateway assignment' 'WARN (Could not retrieve gateway info)' 15.2
       }
       
       return @{
@@ -353,7 +363,7 @@ function Invoke-ConnectivityChecks {
   $cls = Get-IpClass -IPv4 $PPPIP.IPAddress
   switch ($cls) {
     'PUBLIC' { $Health = Add-Health $Health 'Public IP classification' 'OK (Public)' 16 }
-    'CGNAT'  { $Health = Add-Health $Health 'Public IP classification' 'WARN (CGNAT 100.64/10)' 16 }
+    'CGNAT'  { $Health = Add-Health $Health 'Public IP classification' 'INFO (CGNAT 100.64/10)' 16 }
     'PRIVATE'{ $Health = Add-Health $Health 'Public IP classification' 'WARN (Private RFC1918)' 16 }
     'APIPA'  { $Health = Add-Health $Health 'Public IP classification' 'FAIL (APIPA)' 16 }
     default  { $Health = Add-Health $Health 'Public IP classification' "WARN ($cls)" 16 }
@@ -375,12 +385,12 @@ function Invoke-ConnectivityChecks {
            Sort-Object -Property RouteMetric |
            Select-Object -First 1
   $gw = if ($route) { $route.NextHop } else { $null }
-  if ($gw -and -not $icmpBlocked) {
+  if ($gw -and -not $icmpBlocked -and $gw -ne '0.0.0.0') {
     $okGw = Test-PingHost -TargetName $gw -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
     if ($okGw) { $Health = Add-Health $Health 'Gateway reachability' 'OK' 17 }
     else { $Health = Add-Health $Health 'Gateway reachability' 'FAIL (unreachable)' 17 }
   } else {
-    $Health = Add-Health $Health 'Gateway reachability' ($icmpBlocked ? 'N/A (ICMP blocked)' : 'WARN (no default route record)') 17
+    $Health = Add-Health $Health 'Gateway reachability' ($gw -eq '0.0.0.0' ? 'N/A (PPP gateway unspecified)' : ($icmpBlocked ? 'N/A (ICMP blocked)' : 'WARN (no default route record)')) 17
   }
 
   # External ping via PPP (skip if ICMP blocked)
@@ -392,6 +402,15 @@ function Invoke-ConnectivityChecks {
   } else {
     $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'SKIP (ICMP blocked by provider)' 18
     $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'SKIP (ICMP blocked by provider)' 19
+  }
+
+  # ICMP vs TCP informational note if they disagree
+  if (-not $icmpBlocked) {
+    $tcpSummary = Get-HealthTcpSummary -Health $Health
+    $icmpFail = ($Health.Values | Where-Object { $_ -match 'Ping \(1\.1\.1\.1\) via PPP.*FAIL|Ping \(8\.8\.8\.8\) via PPP.*FAIL' })
+    if ($icmpFail -and $tcpSummary -match 'OK') {
+      $Health = Add-Health $Health 'ICMP vs TCP' 'INFO (ICMP inconsistent; provider likely rate-limits ICMP; prefer TCP checks)' 19.05
+    }
   }
   
   # [19.1] TCP Connectivity Tests
@@ -417,6 +436,14 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'TCP connectivity' "WARN ($tcpSuccessCount/$($tcpTests.Count) tests passed)" 19.1
   } else {
     $Health = Add-Health $Health 'TCP connectivity' "FAIL (0/$($tcpTests.Count) tests passed)" 19.1
+  }
+
+  # Helper to summarize TCP for later notes
+  function Get-HealthTcpSummary { param([hashtable]$Health)
+    try {
+      $key = ($Health.Keys | Where-Object { $_ -match '^\d{2}_TCP connectivity$' } | Select-Object -First 1)
+      if ($key) { return $Health[$key] } else { return '' }
+    } catch { return '' }
   }
   
   # [19.2] Multi-Destination Routing Analysis (skip if ICMP blocked)

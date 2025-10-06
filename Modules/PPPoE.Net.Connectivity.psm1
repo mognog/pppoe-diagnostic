@@ -6,9 +6,9 @@ function Test-DNSResolution {
   param([string]$InterfaceAlias, [scriptblock]$WriteLog)
   
   $dnsTests = @(
-    @{ Name = "Google DNS (8.8.8.8)"; Server = "8.8.8.8"; Query = "google.com" },
-    @{ Name = "Cloudflare DNS (1.1.1.1)"; Server = "1.1.1.1"; Query = "cloudflare.com" },
-    @{ Name = "Quad9 DNS (9.9.9.9)"; Server = "9.9.9.9"; Query = "quad9.net" }
+    @{ Name = "Public DNS 1"; Server = "8.8.8.8"; Query = "google.com" },
+    @{ Name = "Public DNS 2"; Server = "1.1.1.1"; Query = "cloudflare.com" },
+    @{ Name = "Public DNS 3"; Server = "9.9.9.9"; Query = "quad9.net" }
   )
   
   $results = @()
@@ -327,9 +327,9 @@ function Test-ProviderSpecificDiagnostics {
   
   # Test common ISP DNS servers
   $ispDnsTests = @(
-    @{ Name = "Rise Broadband DNS"; Server = "8.8.8.8"; Query = "google.com" },
-    @{ Name = "OpenDNS"; Server = "208.67.222.222"; Query = "opendns.com" },
-    @{ Name = "Quad9"; Server = "9.9.9.9"; Query = "quad9.net" }
+    @{ Name = "Public DNS 1"; Server = "8.8.8.8"; Query = "google.com" },
+    @{ Name = "Public DNS 2"; Server = "208.67.222.222"; Query = "opendns.com" },
+    @{ Name = "Public DNS 3"; Server = "9.9.9.9"; Query = "quad9.net" }
   )
   
   foreach ($test in $ispDnsTests) {
@@ -365,8 +365,8 @@ function Test-ProviderSpecificDiagnostics {
   
   # Test connection to ISP-specific endpoints
   $ispEndpoints = @(
-    @{ Name = "Cloudflare"; IP = "1.1.1.1" },
-    @{ Name = "Google DNS"; IP = "8.8.8.8" }
+    @{ Name = "Public Endpoint 1"; IP = "1.1.1.1" },
+    @{ Name = "Public Endpoint 2"; IP = "8.8.8.8" }
   )
   
   & $WriteLog "Testing connectivity to various endpoints..."
@@ -413,10 +413,10 @@ function Test-MultiDestinationRouting {
   & $WriteLog "Testing routing to multiple destinations..."
   
   $destinations = @(
-    @{ Name = "Google DNS"; IP = "8.8.8.8" },
-    @{ Name = "Cloudflare DNS"; IP = "1.1.1.1" },
-    @{ Name = "Quad9 DNS"; IP = "9.9.9.9" },
-    @{ Name = "OpenDNS"; IP = "208.67.222.222" }
+    @{ Name = "Public DNS A"; IP = "8.8.8.8" },
+    @{ Name = "Public DNS B"; IP = "1.1.1.1" },
+    @{ Name = "Public DNS C"; IP = "9.9.9.9" },
+    @{ Name = "Public DNS D"; IP = "208.67.222.222" }
   )
   
   $results = @()
