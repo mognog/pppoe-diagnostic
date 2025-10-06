@@ -359,25 +359,40 @@ function Invoke-ConnectivityChecks {
     default  { $Health = Add-Health $Health 'Public IP classification' "WARN ($cls)" 16 }
   }
 
-  # Gateway (peer) reachability: ping default gateway of PPP if present
+  # Early ICMP availability check (provider-agnostic policy)
+  $icmpStatus = Test-ICMPAvailability -WriteLog $WriteLog
+  $icmpBlocked = ($icmpStatus -and $icmpStatus.Status -eq 'BLOCKED' -and $icmpStatus.TCPWorks)
+  if ($icmpBlocked) {
+    $Health = Add-Health $Health 'ICMP availability' 'BLOCKED (TCP works) - skipping ICMP tests' 16.4
+  } elseif ($icmpStatus -and $icmpStatus.Status -eq 'AVAILABLE') {
+    $Health = Add-Health $Health 'ICMP availability' 'OK (ICMP works)' 16.4
+  } else {
+    $Health = Add-Health $Health 'ICMP availability' 'WARN (connectivity issue or unknown)' 16.4
+  }
+
+  # Gateway (peer) reachability: ping default gateway of PPP if present (skip if ICMP blocked)
   $route = Get-NetRoute -InterfaceIndex $PPPInterface.InterfaceIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
            Sort-Object -Property RouteMetric |
            Select-Object -First 1
   $gw = if ($route) { $route.NextHop } else { $null }
-  if ($gw) {
+  if ($gw -and -not $icmpBlocked) {
     $okGw = Test-PingHost -TargetName $gw -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
     if ($okGw) { $Health = Add-Health $Health 'Gateway reachability' 'OK' 17 }
     else { $Health = Add-Health $Health 'Gateway reachability' 'FAIL (unreachable)' 17 }
   } else {
-    $Health = Add-Health $Health 'Gateway reachability' 'WARN (no default route record)' 17
+    $Health = Add-Health $Health 'Gateway reachability' ($icmpBlocked ? 'N/A (ICMP blocked)' : 'WARN (no default route record)') 17
   }
 
-  # External ping via PPP (grouped together)
-  $ok11 = Test-PingHost -TargetName '1.1.1.1' -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
-  $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' ($ok11 ? 'OK' : 'FAIL') 18
-  
-  $ok88 = Test-PingHost -TargetName '8.8.8.8' -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
-  $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' ($ok88 ? 'OK' : 'FAIL') 19
+  # External ping via PPP (skip if ICMP blocked)
+  if (-not $icmpBlocked) {
+    $ok11 = Test-PingHost -TargetName '1.1.1.1' -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
+    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' ($ok11 ? 'OK' : 'FAIL') 18
+    $ok88 = Test-PingHost -TargetName '8.8.8.8' -Count 2 -TimeoutMs 1000 -Source $PPPIP.IPAddress
+    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' ($ok88 ? 'OK' : 'FAIL') 19
+  } else {
+    $Health = Add-Health $Health 'Ping (1.1.1.1) via PPP' 'SKIP (ICMP blocked by provider)' 18
+    $Health = Add-Health $Health 'Ping (8.8.8.8) via PPP' 'SKIP (ICMP blocked by provider)' 19
+  }
   
   # [19.1] TCP Connectivity Tests
   & $WriteLog ""
@@ -404,21 +419,24 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'TCP connectivity' "FAIL (0/$($tcpTests.Count) tests passed)" 19.1
   }
   
-  # [19.2] Multi-Destination Routing Analysis
+  # [19.2] Multi-Destination Routing Analysis (skip if ICMP blocked)
   & $WriteLog ""
   & $WriteLog "=== MULTI-DESTINATION ROUTING ANALYSIS ==="
-  $routingResults = Test-MultiDestinationRouting -WriteLog $WriteLog
-  # Safe array handling - Where-Object returns null when no matches found
-  $completeRoutesResults = $routingResults | Where-Object { $_.Status -eq "COMPLETE" }
-  $completeRoutes = if ($completeRoutesResults) { $completeRoutesResults.Count } else { 0 }
-  $totalRoutes = $routingResults.Count
-  
-  if ($completeRoutes -eq $totalRoutes) {
-    $Health = Add-Health $Health 'Multi-destination routing' "OK ($completeRoutes/$totalRoutes complete)" 19.2
-  } elseif ($completeRoutes -gt 0) {
-    $Health = Add-Health $Health 'Multi-destination routing' "WARN ($completeRoutes/$totalRoutes complete)" 19.2
+  if ($icmpBlocked) {
+    & $WriteLog "ICMP blocked - skipping traceroute-based routing analysis"
+    $Health = Add-Health $Health 'Multi-destination routing' 'SKIP (ICMP blocked by provider)' 19.2
   } else {
-    $Health = Add-Health $Health 'Multi-destination routing' "FAIL (0/$totalRoutes complete)" 19.2
+    $routingResults = Test-MultiDestinationRouting -WriteLog $WriteLog
+    $completeRoutesResults = $routingResults | Where-Object { $_.Status -eq "COMPLETE" }
+    $completeRoutes = if ($completeRoutesResults) { $completeRoutesResults.Count } else { 0 }
+    $totalRoutes = $routingResults.Count
+    if ($completeRoutes -eq $totalRoutes) {
+      $Health = Add-Health $Health 'Multi-destination routing' "OK ($completeRoutes/$totalRoutes complete)" 19.2
+    } elseif ($completeRoutes -gt 0) {
+      $Health = Add-Health $Health 'Multi-destination routing' "WARN ($completeRoutes/$totalRoutes complete)" 19.2
+    } else {
+      $Health = Add-Health $Health 'Multi-destination routing' "FAIL (0/$totalRoutes complete)" 19.2
+    }
   }
   
   # [19.3] Firewall State Check
@@ -438,13 +456,17 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'Windows Firewall' 'WARN (Could not check firewall state)' 19.3
   }
 
-  # MTU probe (rough)
+  # MTU probe (rough) - skip if ICMP blocked
   # We try payload 1472 with DF; if success -> ~1492 MTU on PPP
-  try {
-    Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
-    $Health = Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)' 20
-  } catch {
-    $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
+  if (-not $icmpBlocked) {
+    try {
+      Test-Connection -TargetName '1.1.1.1' -Count 1 -DontFragment -BufferSize 1472 -TimeoutSeconds 2 -ErrorAction Stop | Out-Null
+      $Health = Add-Health $Health 'MTU probe (DF)' 'OK (~1492, payload 1472)' 20
+    } catch {
+      $Health = Add-Health $Health 'MTU probe (DF)' 'WARN (payload 1472 blocked; lower MTU)' 20
+    }
+  } else {
+    $Health = Add-Health $Health 'MTU probe (DF)' 'SKIP (ICMP blocked by provider)' 20
   }
 
   # DNS Resolution Tests
@@ -462,26 +484,34 @@ function Invoke-ConnectivityChecks {
     $Health = Add-Health $Health 'DNS resolution' 'FAIL (No DNS servers working)' 21
   }
 
-  # Packet Loss Test
-  & $WriteLog "Testing packet loss to 1.1.1.1..."
-  $packetLoss = Test-PacketLoss -TargetIP '1.1.1.1' -Count 20 -WriteLog $WriteLog
-  if ($packetLoss.LossPercent -eq 0) {
-    $Health = Add-Health $Health 'Packet loss test' "OK (0% loss, $($packetLoss.AvgLatency)ms avg)" 22
-  } elseif ($packetLoss.LossPercent -le 2) {
-    $Health = Add-Health $Health 'Packet loss test' "WARN ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
+  # Packet Loss Test (skip if ICMP blocked)
+  if (-not $icmpBlocked) {
+    & $WriteLog "Testing packet loss to 1.1.1.1..."
+    $packetLoss = Test-PacketLoss -TargetIP '1.1.1.1' -Count 20 -WriteLog $WriteLog
+    if ($packetLoss.LossPercent -eq 0) {
+      $Health = Add-Health $Health 'Packet loss test' "OK (0% loss, $($packetLoss.AvgLatency)ms avg)" 22
+    } elseif ($packetLoss.LossPercent -le 2) {
+      $Health = Add-Health $Health 'Packet loss test' "WARN ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
+    } else {
+      $Health = Add-Health $Health 'Packet loss test' "FAIL ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
+    }
   } else {
-    $Health = Add-Health $Health 'Packet loss test' "FAIL ($($packetLoss.LossPercent)% loss, $($packetLoss.AvgLatency)ms avg)" 22
+    $Health = Add-Health $Health 'Packet loss test' 'SKIP (ICMP blocked by provider)' 22
   }
 
-  # Route Stability Test
-  & $WriteLog "Testing route stability to 8.8.8.8..."
-  $routeStability = Test-RouteStability -TargetIP '8.8.8.8' -Count 5 -WriteLog $WriteLog
-  if ($routeStability.Consistency -ge 80) {
-    $Health = Add-Health $Health 'Route stability' "OK ($($routeStability.Consistency)% consistent)" 23
-  } elseif ($routeStability.Consistency -ge 60) {
-    $Health = Add-Health $Health 'Route stability' "WARN ($($routeStability.Consistency)% consistent)" 23
+  # Route Stability Test (skip if ICMP blocked; tracert-based)
+  if (-not $icmpBlocked) {
+    & $WriteLog "Testing route stability to 8.8.8.8..."
+    $routeStability = Test-RouteStability -TargetIP '8.8.8.8' -Count 5 -WriteLog $WriteLog
+    if ($routeStability.Consistency -ge 80) {
+      $Health = Add-Health $Health 'Route stability' "OK ($($routeStability.Consistency)% consistent)" 23
+    } elseif ($routeStability.Consistency -ge 60) {
+      $Health = Add-Health $Health 'Route stability' "WARN ($($routeStability.Consistency)% consistent)" 23
+    } else {
+      $Health = Add-Health $Health 'Route stability' "FAIL ($($routeStability.Consistency)% consistent)" 23
+    }
   } else {
-    $Health = Add-Health $Health 'Route stability' "FAIL ($($routeStability.Consistency)% consistent)" 23
+    $Health = Add-Health $Health 'Route stability' 'SKIP (ICMP blocked by provider)' 23
   }
 
   # Interface Statistics

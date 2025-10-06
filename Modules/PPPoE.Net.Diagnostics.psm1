@@ -256,17 +256,15 @@ function Test-StreamingServiceDNSAndTCP {
       $sw.Stop()
       $ipv4ResolveTime = $sw.ElapsedMilliseconds
       
-      if ($ipv4Resolution -and $ipv4Resolution.Count -gt 0) {
-        $ipv4Addresses = $ipv4Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress }
-        if (-not $ipv4Addresses) { $ipv4Addresses = @() }
-        $serviceResult.IPv4Addresses = $ipv4Addresses
-        if ($ipv4Addresses.Count -gt 0) {
-          & $WriteLog "    IPv4: $($ipv4Addresses.Count) addresses (${ipv4ResolveTime}ms) - $($ipv4Addresses -join ', ')"
-        } else {
-          & $WriteLog "    IPv4: No valid addresses resolved"
-        }
+      $ipv4Addresses = @()
+      if ($ipv4Resolution) {
+        $ipv4Addresses = @($ipv4Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress })
+      }
+      $serviceResult.IPv4Addresses = $ipv4Addresses
+      if ($ipv4Addresses.Count -gt 0) {
+        & $WriteLog "    IPv4: $($ipv4Addresses.Count) addresses (${ipv4ResolveTime}ms) - $($ipv4Addresses -join ', ')"
       } else {
-        & $WriteLog "    IPv4: No addresses resolved"
+        & $WriteLog "    IPv4: No valid addresses resolved"
       }
       
       # IPv6 resolution
@@ -275,17 +273,15 @@ function Test-StreamingServiceDNSAndTCP {
       $sw.Stop()
       $ipv6ResolveTime = $sw.ElapsedMilliseconds
       
-      if ($ipv6Resolution -and $ipv6Resolution.Count -gt 0) {
-        $ipv6Addresses = $ipv6Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress }
-        if (-not $ipv6Addresses) { $ipv6Addresses = @() }
-        $serviceResult.IPv6Addresses = $ipv6Addresses
-        if ($ipv6Addresses.Count -gt 0) {
-          & $WriteLog "    IPv6: $($ipv6Addresses.Count) addresses (${ipv6ResolveTime}ms) - $($ipv6Addresses -join ', ')"
-        } else {
-          & $WriteLog "    IPv6: No valid addresses resolved"
-        }
+      $ipv6Addresses = @()
+      if ($ipv6Resolution) {
+        $ipv6Addresses = @($ipv6Resolution | Where-Object { $_.PSObject.Properties['IPAddress'] -and $_.IPAddress } | ForEach-Object { $_.IPAddress })
+      }
+      $serviceResult.IPv6Addresses = $ipv6Addresses
+      if ($ipv6Addresses.Count -gt 0) {
+        & $WriteLog "    IPv6: $($ipv6Addresses.Count) addresses (${ipv6ResolveTime}ms) - $($ipv6Addresses -join ', ')"
       } else {
-        & $WriteLog "    IPv6: No addresses resolved"
+        & $WriteLog "    IPv6: No valid addresses resolved"
       }
       
       $serviceResult.DNSResolution = @{

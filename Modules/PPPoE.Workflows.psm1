@@ -353,12 +353,19 @@ function Invoke-EnhancedConnectivityDiagnostics {
     $packetStatus = if ($packetResult.Diagnosis -eq 'CONNECTION_FAILURES_CAPTURED') { 'FAIL (failures captured)' } else { 'OK' }
     $Health = Add-Health $Health 'Packet Capture Test' $packetStatus 53
     
-    # Test 5: Time-Based Pattern Analysis (5 minutes)
-    & $WriteLog "Test 5/5: Time-Based Pattern Analysis..."
-    & $WriteLog "This test will take about 5 minutes to complete - please wait"
-    $timeResult = Test-TimeBasedPatternAnalysisQuick -WriteLog $WriteLog
-    $timeStatus = if ($timeResult.Diagnosis -eq 'SEVERE_DEGRADATION') { 'FAIL (degradation detected)' } else { 'OK' }
-    $Health = Add-Health $Health 'Time-Based Patterns' $timeStatus 54
+    # Test 5: Quick Stability Suite (~60s)
+    & $WriteLog "Test 5/5: Quick Stability Suite..."
+    & $WriteLog "This set of tests will provide concise evidence without noisy logs"
+    $stabilityResult = Test-QuickStabilitySuite -WriteLog $WriteLog
+    $stabilityStatus = switch ($stabilityResult.Diagnosis) {
+      'IDLE_DROPS_CONFIRMED' { 'FAIL (idle TCP connections drop)' }
+      'BURST_CAPACITY_LIMITED' { 'WARN (burst connection ceiling)' }
+      'DOWNLOAD_INSTABILITY' { 'FAIL (download instability)' }
+      'TLS_HANDSHAKE_ISSUES' { 'WARN (TLS handshake issues)' }
+      'KEEPALIVE_REUSE_FAILS' { 'WARN (keep-alive reuse fails)' }
+      default { 'OK' }
+    }
+    $Health = Add-Health $Health 'Quick Stability Suite' $stabilityStatus 54
     
     # Generate enhanced diagnosis summary
     & $WriteLog ""

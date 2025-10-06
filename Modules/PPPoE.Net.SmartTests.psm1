@@ -819,3 +819,251 @@ function Test-TCPConnectionResetDetectionQuick {
 }
 
 Export-ModuleMember -Function *
+
+# Quick Stability Suite (under ~60s) with summarized logging
+function Test-QuickStabilitySuite {
+  param(
+    [string]$Host = 'netflix.com',
+    [int]$Port = 443,
+    [string]$SmallFileUrl = 'https://httpbin.org/bytes/20480',   # ~20KB
+    [string]$LargeFileUrl = 'https://speed.hetzner.de/10MB.bin', # 10MB
+    [int]$TimeBudgetSeconds = 60,
+    [scriptblock]$WriteLog
+  )
+  & $WriteLog "Running Quick Stability Suite (<= ${TimeBudgetSeconds}s)..."
+
+  $suiteStart = Get-Date
+  $deadline = $suiteStart.AddSeconds($TimeBudgetSeconds)
+
+  $evidence = @{
+    IdleHold = $null
+    Reuse = $null
+    BurstCapacity = $null
+    SequentialSpeed = $null
+    SmallDownloads = $null
+    LargeDownload = $null
+    SustainedThroughput = $null
+    TLSHandshakes = $null
+    HttpTiming = $null
+    Diagnosis = ''
+  }
+
+  function Limit-LogFailures {
+    param([array]$Errors, [int]$Max=3)
+    if (-not $Errors) { return @() }
+    return @($Errors | Select-Object -First $Max)
+  }
+
+  # 1) Idle connection hold: 10 connections, wait ~25s
+  $idleStart = Get-Date
+  $idleConnections = 10
+  $idleErrors = @()
+  $alive = 0
+  $clients = @()
+  try {
+    for ($i=1; $i -le $idleConnections; $i++) {
+      $c = New-Object System.Net.Sockets.TcpClient
+      $c.ReceiveTimeout = 5000
+      $c.SendTimeout = 5000
+      try { $c.Connect($Host, $Port) } catch { $idleErrors += $_.Exception.Message }
+      $clients += $c
+    }
+    Start-Sleep -Seconds 25
+    foreach ($c in $clients) {
+      try {
+        if ($c.Connected) {
+          # probe minimal write/read
+          $s = $c.GetStream(); $s.ReadTimeout = 500
+          $bytes = [System.Text.Encoding]::ASCII.GetBytes("HEAD / HTTP/1.1`r`nHost: $Host`r`nConnection: keep-alive`r`n`r`n")
+          $s.Write($bytes,0,$bytes.Length)
+          $alive++
+        }
+      } catch { $idleErrors += $_.Exception.Message }
+    }
+  } finally {
+    foreach ($c in $clients) { try { $c.Close() } catch {} }
+  }
+  $evidence.IdleHold = @{ Opened=$idleConnections; Alive=$alive; Failures=$idleConnections-$alive; SampleErrors=(Limit-LogFailures $idleErrors) }
+  & $WriteLog "Idle hold: $alive/$idleConnections alive after ~25s"
+
+  # 2) Connection reuse: single connection, 20 requests over ~20s
+  $reuseOk = 0; $reuseErr = @();
+  try {
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds(2)
+    for ($i=1; $i -le 20; $i++) {
+      try {
+        $resp = $client.GetAsync('https://www.cloudflare.com', [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        if ($resp.IsSuccessStatusCode) { $reuseOk++ }
+      } catch { $reuseErr += $_.Exception.Message }
+      Start-Sleep -Milliseconds 500
+      if ((Get-Date) -gt $deadline) { break }
+    }
+  } catch { $reuseErr += $_.Exception.Message } finally { if ($client) { $client.Dispose() } }
+  $evidence.Reuse = @{ Requests=20; Success=$reuseOk; Failures=20-$reuseOk; SampleErrors=(Limit-LogFailures $reuseErr) }
+  & $WriteLog "Connection reuse: $reuseOk/20 successful"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 3) Burst capacity: 50 simultaneous connects
+  $burstCount = 50; $burstSuccess=0; $burstErr=@()
+  $burstTasks = @()
+  for ($i=1; $i -le $burstCount; $i++) {
+    $burstTasks += [System.Threading.Tasks.Task]::Run({
+      try {
+        $tc = New-Object System.Net.Sockets.TcpClient
+        $tc.ReceiveTimeout = 3000
+        $tc.SendTimeout = 3000
+        $tc.Connect($Host,$Port)
+        $ok = $tc.Connected
+        $tc.Close()
+        return $ok
+      } catch { return $false }
+    }.GetNewClosure())
+  }
+  [System.Threading.Tasks.Task]::WaitAll($burstTasks)
+  foreach ($t in $burstTasks) { if ($t.Result) { $burstSuccess++ } }
+  $evidence.BurstCapacity = @{ Attempted=$burstCount; Success=$burstSuccess; Failures=$burstCount-$burstSuccess }
+  & $WriteLog "Burst capacity: $burstSuccess/$burstCount connections"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 4) Sequential connection speed: 30 rapid connects
+  $seqCount=30; $seqTimes=@(); $seqFail=0
+  for ($i=1; $i -le $seqCount; $i++) {
+    $sw=[System.Diagnostics.Stopwatch]::StartNew()
+    try {
+      $tc=New-Object System.Net.Sockets.TcpClient
+      $tc.ReceiveTimeout=3000; $tc.SendTimeout=3000
+      $tc.Connect($Host,$Port)
+      $sw.Stop()
+      if ($tc.Connected) { $seqTimes += $sw.ElapsedMilliseconds } else { $seqFail++ }
+      $tc.Close()
+    } catch { $sw.Stop(); $seqFail++ }
+    Start-Sleep -Milliseconds 100
+    if ((Get-Date) -gt $deadline) { break }
+  }
+  $seqAvg = if ($seqTimes.Count -gt 0) { [Math]::Round(($seqTimes | Measure-Object -Average).Average,1) } else { 0 }
+  $evidence.SequentialSpeed = @{ Attempts=$seqCount; Failures=$seqFail; AvgMs=$seqAvg }
+  & $WriteLog "Sequential connect: avg ${seqAvg}ms, failures $seqFail/$seqCount"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 5) Small file download repetition: 30 times
+  $smallTotal=30; $smallOk=0; $smallErr=@()
+  for ($i=1; $i -le $smallTotal; $i++) {
+    try {
+      $resp = Invoke-WebRequest -Uri $SmallFileUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+      if ($resp.StatusCode -eq 200) { $smallOk++ } else { $smallErr += "Status $($resp.StatusCode)" }
+    } catch { $smallErr += $_.Exception.Message }
+    if ((Get-Date) -gt $deadline) { break }
+  }
+  $evidence.SmallDownloads = @{ Attempts=$smallTotal; Success=$smallOk; Failures=$smallTotal-$smallOk; SampleErrors=(Limit-LogFailures $smallErr) }
+  & $WriteLog "Small downloads: $smallOk/$smallTotal"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 6) Single larger download (10MB)
+  $largeOk=$false; $largeMs=0; $largeErr=$null
+  try {
+    $sw=[System.Diagnostics.Stopwatch]::StartNew()
+    $resp = Invoke-WebRequest -Uri $LargeFileUrl -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+    $sw.Stop()
+    if ($resp.StatusCode -eq 200 -and $resp.Content) { $largeOk=$true; $largeMs=$sw.ElapsedMilliseconds }
+  } catch { $largeErr=$_.Exception.Message }
+  $evidence.LargeDownload = @{ Success=$largeOk; TimeMs=$largeMs; Error=$largeErr }
+  & $WriteLog ("Large download: " + ($(if ($largeOk) { "SUCCESS (${largeMs}ms)" } else { "FAIL" })))
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 7) Sustained throughput ~20s (shortened to respect budget)
+  $sustainSeconds=20; $samples=@(); $sustainErr=@(); $sustainStart=Get-Date
+  while (((Get-Date)-$sustainStart).TotalSeconds -lt $sustainSeconds) {
+    try {
+      $sw=[System.Diagnostics.Stopwatch]::StartNew()
+      $r=Invoke-WebRequest -Uri $SmallFileUrl -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+      $sw.Stop()
+      if ($r.StatusCode -eq 200 -and $r.Content) {
+        $bytes=$r.Content.Length
+        $mbps=[Math]::Round((($bytes*8)/($sw.ElapsedMilliseconds/1000))/1000000,2)
+        $samples += $mbps
+      }
+    } catch { $sustainErr += $_.Exception.Message }
+    Start-Sleep -Milliseconds 300
+    if ((Get-Date) -gt $deadline) { break }
+  }
+  $avgMbps = if ($samples.Count -gt 0) { [Math]::Round(($samples | Measure-Object -Average).Average,2) } else { 0 }
+  $evidence.SustainedThroughput = @{ Duration=$sustainSeconds; AvgMbps=$avgMbps; Samples=$samples.Count; SampleErrors=(Limit-LogFailures $sustainErr) }
+  & $WriteLog "Sustained throughput: avg ${avgMbps} Mbps over ${sustainSeconds}s (${samples.Count} samples)"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 8) TLS handshake stress: 50 handshakes quickly
+  $tlsTotal=50; $tlsOk=0; $tlsErr=@()
+  for ($i=1; $i -le $tlsTotal; $i++) {
+    try {
+      $tcp = New-Object System.Net.Sockets.TcpClient
+      $tcp.ReceiveTimeout=3000; $tcp.SendTimeout=3000
+      $tcp.Connect($Host,$Port)
+      $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { param($s,$c,$ch,$e) $true })
+      $ssl.AuthenticateAsClient($Host)
+      if ($ssl.IsAuthenticated) { $tlsOk++ }
+      $ssl.Close(); $tcp.Close()
+    } catch { $tlsErr += $_.Exception.Message }
+    if ((Get-Date) -gt $deadline) { break }
+  }
+  $evidence.TLSHandshakes = @{ Attempts=$tlsTotal; Success=$tlsOk; Failures=$tlsTotal-$tlsOk; SampleErrors=(Limit-LogFailures $tlsErr) }
+  & $WriteLog "TLS handshakes: $tlsOk/$tlsTotal"
+
+  if ((Get-Date) -gt $deadline) { goto FINISH }
+
+  # 9) HTTP request timing patterns: 50 rapid HTTPS requests
+  $httpTotal=50; $httpTimes=@(); $httpFail=0
+  try {
+    $hc = New-Object System.Net.Http.HttpClient
+    $hc.Timeout=[TimeSpan]::FromSeconds(3)
+    for ($i=1; $i -le $httpTotal; $i++) {
+      $sw=[System.Diagnostics.Stopwatch]::StartNew()
+      try {
+        $r=$hc.GetAsync('https://www.youtube.com', [System.Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        $sw.Stop()
+        if ($r.IsSuccessStatusCode) { $httpTimes += $sw.ElapsedMilliseconds } else { $httpFail++ }
+      } catch { $httpFail++ }
+      if ((Get-Date) -gt $deadline) { break }
+    }
+  } catch { $httpFail = $httpTotal } finally { if ($hc) { $hc.Dispose() } }
+  $httpAvg = if ($httpTimes.Count -gt 0) { [Math]::Round(($httpTimes | Measure-Object -Average).Average,1) } else { 0 }
+  $evidence.HttpTiming = @{ Attempts=$httpTotal; Failures=$httpFail; AvgMs=$httpAvg }
+  & $WriteLog "HTTP timing: avg ${$httpAvg}ms, failures $httpFail/$httpTotal"
+
+FINISH:
+  # High-signal diagnosis
+  $idleDrops = ($evidence.IdleHold.Opened - $evidence.IdleHold.Alive)
+  $burstCeiling = ($evidence.BurstCapacity.Success -lt 50)
+  $downloadFailures = ($evidence.SmallDownloads.Failures -gt 0 -or -not $evidence.LargeDownload.Success)
+  $tlsIssues = ($evidence.TLSHandshakes.Failures -gt 0)
+  $reuseIssues = ($evidence.Reuse.Failures -gt 0)
+
+  if ($idleDrops -gt 0) {
+    $evidence.Diagnosis = 'IDLE_DROPS_CONFIRMED'
+  } elseif ($burstCeiling) {
+    $evidence.Diagnosis = 'BURST_CAPACITY_LIMITED'
+  } elseif ($downloadFailures) {
+    $evidence.Diagnosis = 'DOWNLOAD_INSTABILITY'
+  } elseif ($tlsIssues) {
+    $evidence.Diagnosis = 'TLS_HANDSHAKE_ISSUES'
+  } elseif ($reuseIssues) {
+    $evidence.Diagnosis = 'KEEPALIVE_REUSE_FAILS'
+  } else {
+    $evidence.Diagnosis = 'NO_QUICK_INSTABILITY_DETECTED'
+  }
+
+  # Summarized evidence output (no spam)
+  & $WriteLog "Quick Stability Evidence: $($evidence.Diagnosis)"
+  & $WriteLog "  Idle hold alive: $($evidence.IdleHold.Alive)/$($evidence.IdleHold.Opened)"
+  & $WriteLog "  Burst success: $($evidence.BurstCapacity.Success)/$($evidence.BurstCapacity.Attempted)"
+  & $WriteLog "  Small downloads: $($evidence.SmallDownloads.Success)/$($evidence.SmallDownloads.Attempts)"
+  & $WriteLog "  TLS handshakes: $($evidence.TLSHandshakes.Success)/$($evidence.TLSHandshakes.Attempts)"
+
+  return $evidence
+}

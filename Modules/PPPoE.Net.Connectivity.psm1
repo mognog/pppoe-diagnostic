@@ -2180,14 +2180,16 @@ function Test-PortExhaustionDetectionQuick {
     $hostIndex = ($i - 1) % $testHosts.Count
     $targetHost = $testHosts[$hostIndex]
     $targetPort = 443
+    $timeout = $connectionTimeout
     
     $task = [System.Threading.Tasks.Task]::Run({
-      param($targetHost, $targetPort, $timeout)
-      
+      $th = $using:targetHost
+      $tp = $using:targetPort
+      $to = $using:timeout
       try {
         $tcpClient = New-Object System.Net.Sockets.TcpClient
-        $tcpClient.ReceiveTimeout = $timeout * 1000
-        $tcpClient.Connect($targetHost, $targetPort)
+        $tcpClient.ReceiveTimeout = $to * 1000
+        $tcpClient.Connect($th, $tp)
         
         if ($tcpClient.Connected) {
           $tcpClient.Close()
@@ -2207,7 +2209,7 @@ function Test-PortExhaustionDetectionQuick {
           return @{ Status = 'ERROR'; Error = $errorMsg }
         }
       }
-    }, $targetHost, $targetPort, $connectionTimeout)
+    })
     
     $tasks += $task
   }
