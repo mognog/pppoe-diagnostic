@@ -37,6 +37,7 @@ function Disconnect-AllPPPoE {
   Start-Sleep -Milliseconds 1000
 }
 
+# PSScriptAnalyzer SuppressMessage ruleName=PSAvoidUsingPlainTextForPassword target=Connect-PPP justification="rasdial only accepts plain text username/password; using SecureString/PSCredential is not compatible"
 function Connect-PPP {
   param(
     [string]$PppoeName,
@@ -59,9 +60,23 @@ function Connect-PPP {
 
   # Success heuristic: ExitCode==0 AND we can find "Command completed successfully"
   $ok = ($code -eq 0 -and $out -match '(?i)completed successfully')
-  return @{ Success = [bool]$ok; Code = [int]$code; Output = $out }
+
+  # Friendly error mapping (common RasDial codes)
+  $friendly = $null
+  if (-not $ok) {
+    if ($code -eq 691 -or $out -match '(?i)error\s*691') {
+      $friendly = 'Authentication failed (error 691): Check PPPoE username/password or saved credentials.'
+    } elseif ($code -eq 651 -or $out -match '(?i)error\s*651') {
+      $friendly = 'Device or modem error (error 651): Check network adapter/driver and cabling.'
+    } elseif ($code -eq 619 -or $out -match '(?i)error\s*619') {
+      $friendly = 'Port disconnected (error 619): Remote server closed connection.'
+    }
+  }
+
+  return @{ Success = [bool]$ok; Code = [int]$code; Output = $out; FriendlyError = $friendly }
 }
 
+# PSScriptAnalyzer SuppressMessage ruleName=PSAvoidUsingPlainTextForPassword target=Connect-PPPWithFallback justification="rasdial only accepts plain text username/password; using SecureString/PSCredential is not compatible"
 function Connect-PPPWithFallback {
   param(
     [string]$PppoeName,
@@ -96,6 +111,11 @@ function Connect-PPPWithFallback {
     }
   }
   & $WriteLog "FAILED: Windows saved credentials failed (exit code: $($result.Code))"
+  # Fail-fast on explicit bad credentials (avoid useless retries)
+  if ($result -and $result.Code -eq 691 -or ($result.Output -and $result.Output -match '(?i)error\s*691')) {
+    & $WriteLog "FAIL-FAST: Authentication error 691 detected. Skipping other credential sources."
+    return @{ Success = $false; Code = $result.Code; Output = $result.Output; Method = 'Windows Saved'; CredentialSource = 'Windows saved credentials'; FriendlyError = 'Authentication failed (error 691): Check PPPoE username/password or saved credentials.' }
+  }
   
   # Attempt 2: Try external credentials file
   if ($CredentialsFile -and (Test-Path $CredentialsFile)) {
@@ -135,6 +155,11 @@ function Connect-PPPWithFallback {
           & $WriteLog "SUCCESS: Credentials from file will be recorded in health summary"
         } catch {
           & $WriteLog "WARN: Could not log health status: $($_.Exception.Message)"
+        }
+        # Fail-fast on 691
+        if ($result -and $result.Code -eq 691 -or ($result.Output -and $result.Output -match '(?i)error\s*691')) {
+          & $WriteLog "FAIL-FAST: Authentication error 691 detected with file credentials."
+          return @{ Success = $false; Code = $result.Code; Output = $result.Output; Method = 'File'; CredentialSource = "credentials.ps1 file for user: $fileUserName"; FriendlyError = 'Authentication failed (error 691): Check PPPoE username/password in credentials file.' }
         }
           return @{ 
             Success = $true; 
@@ -178,6 +203,10 @@ function Connect-PPPWithFallback {
       }
     }
     & $WriteLog "FAILED: Script parameters failed (exit code: $($result.Code))"
+    if ($result -and $result.Code -eq 691 -or ($result.Output -and $result.Output -match '(?i)error\s*691')) {
+      & $WriteLog "FAIL-FAST: Authentication error 691 detected with script parameters."
+      return @{ Success = $false; Code = $result.Code; Output = $result.Output; Method = 'Parameters'; CredentialSource = "script parameters for user: $UserName"; FriendlyError = 'Authentication failed (error 691): Check PPPoE username/password passed to script.' }
+    }
   } else {
     & $WriteLog "SKIP: No credentials provided as script parameters"
   }

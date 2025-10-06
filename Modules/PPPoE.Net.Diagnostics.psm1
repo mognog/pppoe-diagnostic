@@ -5,6 +5,12 @@ Set-StrictMode -Version 3.0
 function Test-ONTAvailability {
   param([scriptblock]$WriteLog)
   
+  # Allow provider-agnostic skip of ONT web UI probing (LED-only prompt remains)
+  if ($env:PPPOE_SKIP_ONT_WEBUI -eq '1') {
+    & $WriteLog "Skipping ONT management web UI probing (env PPPOE_SKIP_ONT_WEBUI=1)"
+    return @{ Status = "SKIPPED"; Reason = "ONT web UI probing disabled" }
+  }
+  
   & $WriteLog "Testing ONT (Optical Network Terminal) management interface..."
   & $WriteLog "NOTE: This tests if ONT management is accessible - many ONTs don't expose this"
   
@@ -1752,15 +1758,15 @@ function Test-MultipleSimultaneousSustainedConnections {
   
   for ($i = 1; $i -le $ConnectionCount; $i++) {
     $connNum = $i
-    $host = $TestHost
-    $port = $TestPort
+    $destHost = $TestHost
+    $destPort = $TestPort
     $duration = $DurationSeconds
     
     $task = [System.Threading.Tasks.Task]::Run({
       $result = @{
         ConnectionNumber = $connNum
-        Host = $host
-        Port = $port
+        Host = $destHost
+        Port = $destPort
         StartTime = Get-Date
         ConnectionEstablished = $false
         DroppedAt = $null
@@ -1778,7 +1784,7 @@ function Test-MultipleSimultaneousSustainedConnections {
         $tcpClient.SendTimeout = 3000
         
         # Establish connection
-        $tcpClient.Connect($host, $port)
+        $tcpClient.Connect($destHost, $destPort)
         
         if ($tcpClient.Connected) {
           $result.ConnectionEstablished = $true
@@ -1795,7 +1801,7 @@ function Test-MultipleSimultaneousSustainedConnections {
               $stream.ReadTimeout = 2000
               
               # Send periodic request
-              $request = "HEAD / HTTP/1.1`r`nHost: $host`r`nConnection: keep-alive`r`n`r`n"
+              $request = "HEAD / HTTP/1.1`r`nHost: $destHost`r`nConnection: keep-alive`r`n`r`n"
               $requestBytes = [System.Text.Encoding]::ASCII.GetBytes($request)
               $stream.Write($requestBytes, 0, $requestBytes.Length)
               $result.BytesSent += $requestBytes.Length
@@ -1847,7 +1853,7 @@ function Test-MultipleSimultaneousSustainedConnections {
   & $WriteLog "Multiple Simultaneous Connections Analysis:"
   
   $established = ($connectionResults | Where-Object { $_.ConnectionEstablished }).Count
-  $dropped = ($connectionResults | Where-Object { $_.DroppedAt -ne $null }).Count
+  $dropped = ($connectionResults | Where-Object { $null -ne $_.DroppedAt }).Count
   $stable = $established - $dropped
   
   & $WriteLog "  Connections established: $established/$ConnectionCount"
@@ -1857,7 +1863,7 @@ function Test-MultipleSimultaneousSustainedConnections {
   if ($dropped -gt 0) {
     & $WriteLog "  Connection drop times:"
     $dropTimes = @()
-    foreach ($conn in $connectionResults | Where-Object { $_.DroppedAt -ne $null }) {
+    foreach ($conn in $connectionResults | Where-Object { $null -ne $_.DroppedAt }) {
       & $WriteLog "    Connection $($conn.ConnectionNumber): Dropped at $($conn.DroppedAt)s"
       $dropTimes += $conn.DroppedAt
     }

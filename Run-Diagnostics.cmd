@@ -16,6 +16,7 @@ if errorlevel 1 (
 )
 
 echo Running diagnostics...
+set "PPPOE_SKIP_ONT_WEBUI=1"
 pwsh -NoProfile -ExecutionPolicy Bypass -File "Invoke-PppoeDiagnostics.ps1" -FullLog
 echo.
 echo Press any key to close...

@@ -82,7 +82,8 @@ try {
     Test-Function "Connect-PPP handles invalid credentials gracefully" {
         try {
             $result = Connect-PPP -PppoeName "TestPPPoE" -UserName "invalid" -Password "invalid"
-            return ($result -is [bool])
+            # Expect a hashtable with Success/Code/Output
+            return ($result -is [hashtable] -and $result.ContainsKey('Success') -and $result.ContainsKey('Code'))
         } catch {
             return $true  # Expected to handle invalid credentials
         }
@@ -91,7 +92,7 @@ try {
     Test-Function "Connect-PPP handles null credentials" {
         try {
             $result = Connect-PPP -PppoeName "TestPPPoE" -UserName $null -Password $null
-            return ($result -is [bool])
+            return ($result -is [hashtable])
         } catch {
             return $true  # Expected to handle null credentials
         }
@@ -100,7 +101,7 @@ try {
     Test-Function "Connect-PPP handles empty credentials" {
         try {
             $result = Connect-PPP -PppoeName "TestPPPoE" -UserName "" -Password ""
-            return ($result -is [bool])
+            return ($result -is [hashtable])
         } catch {
             return $true  # Expected to handle empty credentials
         }
@@ -109,17 +110,21 @@ try {
     # Test Connect-PPPWithFallback
     Test-Function "Connect-PPPWithFallback handles invalid credentials" {
         try {
-            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "invalid" -Password "invalid"
-            return ($result -is [bool])
+            $wl = { param($m) Write-Host $m }
+            $addHealth = { param($h,$n,$s,$o) return $h }
+            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "invalid" -Password "invalid" -CredentialsFile "nonexistent.ps1" -WriteLog $wl -AddHealth $addHealth
+            return ($result -is [hashtable] -and $result.ContainsKey('Success') -and $result.ContainsKey('Method'))
         } catch {
             return $true  # Expected to handle invalid credentials
         }
     }
     
-    Test-Function "Connect-PPPWithFallback returns boolean result" {
+    Test-Function "Connect-PPPWithFallback returns structured result" {
         try {
-            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "test" -Password "test"
-            return ($result -is [bool])
+            $wl = { param($m) Write-Host $m }
+            $addHealth = { param($h,$n,$s,$o) return $h }
+            $result = Connect-PPPWithFallback -PppoeName "TestPPPoE" -UserName "test" -Password "test" -CredentialsFile "nonexistent.ps1" -WriteLog $wl -AddHealth $addHealth
+            return ($result -is [hashtable] -and $result.ContainsKey('Success') -and $result.ContainsKey('CredentialSource'))
         } catch {
             return $true  # Expected to handle errors gracefully
         }
@@ -150,31 +155,31 @@ try {
     
     # Test Test-DefaultRouteVia
     Test-Function "Test-DefaultRouteVia returns boolean" {
-        $result = Test-DefaultRouteVia -InterfaceAlias "TestInterface"
+        $result = Test-DefaultRouteVia -IfIndex 0
         return ($result -is [bool])
     }
     
     Test-Function "Test-DefaultRouteVia handles null input" {
-        $result = Test-DefaultRouteVia -InterfaceAlias $null
+        $result = Test-DefaultRouteVia -IfIndex $null
         return ($result -is [bool])
     }
     
-    Test-Function "Test-DefaultRouteVia handles empty string" {
-        $result = Test-DefaultRouteVia -InterfaceAlias ""
+    Test-Function "Test-DefaultRouteVia handles zero index" {
+        $result = Test-DefaultRouteVia -IfIndex 0
         return ($result -is [bool])
     }
     
     # Test Get-DefaultRouteOwner
     Test-Function "Get-DefaultRouteOwner returns valid result" {
-        $result = Get-DefaultRouteOwner
-        return ($result -eq $null -or ($result -is [object] -and $result.InterfaceAlias))
+        $result = Get-DefaultRouteOwner -WriteLog { param($m) Write-Host $m }
+        return ($result -eq $null -or ($result -is [hashtable] -and $result.ContainsKey('InterfaceIndex')))
     }
     
     # Test Set-RouteMetrics
-    Test-Function "Set-RouteMetrics handles valid interface" {
+    Test-Function "Set-RouteMetrics handles valid interface index" {
         try {
-            Set-RouteMetrics -InterfaceAlias "TestInterface" -Metric 1
-            return $true
+            $ok = Set-RouteMetrics -PppInterfaceIndex 0 -WriteLog { param($m) Write-Host $m }
+            return ($ok -is [bool])
         } catch {
             return $true  # Expected to handle non-existent interface
         }
@@ -182,34 +187,34 @@ try {
     
     Test-Function "Set-RouteMetrics handles null input" {
         try {
-            Set-RouteMetrics -InterfaceAlias $null -Metric 1
-            return $false
+            $ok = Set-RouteMetrics -PppInterfaceIndex $null -WriteLog { param($m) Write-Host $m }
+            return ($ok -is [bool])
         } catch {
-            return $true  # Expected to throw for null input
+            return $true  # Expected to handle null input gracefully
         }
     }
     
     # Test Get-PPPoESessionInfo
     Test-Function "Get-PPPoESessionInfo returns valid structure" {
-        $result = Get-PPPoESessionInfo
-        return ($result -eq $null -or ($result -is [object]))
+        $result = Get-PPPoESessionInfo -PppoeName "TestPPPoE" -WriteLog { param($m) Write-Host $m }
+        return ($result -eq $null -or ($result -is [hashtable]))
     }
     
     # Test Get-PPPGatewayInfo
     Test-Function "Get-PPPGatewayInfo returns valid structure" {
-        $result = Get-PPPGatewayInfo
-        return ($result -eq $null -or ($result -is [object]))
+        $result = Get-PPPGatewayInfo -InterfaceAlias "PPP*" -WriteLog { param($m) Write-Host $m }
+        return ($result -eq $null -or ($result -is [hashtable]))
     }
     
     # Error handling tests
     Test-Function "Functions handle network operation failures gracefully" {
         try {
             # Test multiple functions that might fail due to network conditions
-            $pppInterface = Get-PppInterface
-            $pppIP = Get-PppIPv4
-            $routeOwner = Get-DefaultRouteOwner
-            $sessionInfo = Get-PPPoESessionInfo
-            $gatewayInfo = Get-PPPGatewayInfo
+            $null = Get-PppInterface
+            $null = Get-PppIPv4
+            $null = Get-DefaultRouteOwner -WriteLog { param($m) Write-Host $m }
+            $null = Get-PPPoESessionInfo -PppoeName "TestPPPoE" -WriteLog { param($m) Write-Host $m }
+            $null = Get-PPPGatewayInfo -InterfaceAlias "PPP*" -WriteLog { param($m) Write-Host $m }
             return $true
         } catch {
             return $false
@@ -219,14 +224,14 @@ try {
     # Performance tests
     Test-Function "Get-PppInterface completes within reasonable time" {
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $result = Get-PppInterface
+        $null = Get-PppInterface
         $stopwatch.Stop()
         return ($stopwatch.ElapsedMilliseconds -lt 3000)
     }
     
     Test-Function "Get-PppIPv4 completes within reasonable time" {
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $result = Get-PppIPv4
+        $null = Get-PppIPv4
         $stopwatch.Stop()
         return ($stopwatch.ElapsedMilliseconds -lt 3000)
     }

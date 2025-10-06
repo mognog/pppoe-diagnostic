@@ -143,7 +143,7 @@ try {
     Test-Function "Functions don't leak sensitive data in memory" {
         try {
             $sensitiveData = "VerySecretPassword123!"
-            $result = Test-CredentialsFormat -UserName "test" -Password $sensitiveData
+            $null = Test-CredentialsFormat -UserName "test" -Password $sensitiveData
             
             # Clear the variable
             $sensitiveData = $null
@@ -203,7 +203,7 @@ try {
     
     Test-Function "Credential source functions don't expose file paths inappropriately" {
         try {
-            $result = Show-CredentialSources -WriteLog { param($msg) Write-Host $msg }
+            Show-CredentialSources -WriteLog { param($msg) Write-Host $msg } | Out-Null
             return $true
         } catch {
             return $false
