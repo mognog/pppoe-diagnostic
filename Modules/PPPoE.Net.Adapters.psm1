@@ -132,17 +132,17 @@ function Disable-WiFiAdapters {
     }
     
     if ($wifiAdapter.Status -eq 'Up') {
-      & $WriteLog "Temporarily disabling Wi‑Fi to prioritize PPPoE path: $($wifiAdapter.Name)"
-      & $WriteLog "  Note: Only the primary active Wi‑Fi adapter is affected; it'll be re‑enabled in cleanup."
+      & $WriteLog "Temporarily disabling Wi-Fi to prioritize PPPoE path: $($wifiAdapter.Name)"
+      & $WriteLog "  Note: Only the primary active Wi-Fi adapter is affected; it'll be re-enabled in cleanup."
       try {
         Disable-NetAdapter -Name $wifiAdapter.Name -Confirm:$false -ErrorAction Stop
-        & $WriteLog "Wi‑Fi adapter disabled: $($wifiAdapter.Name)"
+        & $WriteLog "Wi-Fi adapter disabled: $($wifiAdapter.Name)"
         $disabledAdapters += $wifiAdapter.Name
       } catch {
-        & $WriteLog "Failed to disable Wi‑Fi adapter $($wifiAdapter.Name): $($_.Exception.Message)"
+        & $WriteLog "Failed to disable Wi-Fi adapter $($wifiAdapter.Name): $($_.Exception.Message)"
       }
     } else {
-      & $WriteLog "Wi‑Fi adapter already disabled: $($wifiAdapter.Name)"
+      & $WriteLog "Wi-Fi adapter already disabled: $($wifiAdapter.Name)"
     }
     
     # Force array return to handle PowerShell's array behavior
@@ -186,15 +186,15 @@ function Enable-WiFiAdapters {
     
     foreach ($adapter in $wifiAdapters) {
       if ($adapter.Status -eq 'Disabled') {
-        & $WriteLog "Re‑enabling Wi‑Fi adapter: $($adapter.Name)"
+        & $WriteLog "Re-enabling Wi-Fi adapter: $($adapter.Name)"
         try {
           Enable-NetAdapter -Name $adapter.Name -Confirm:$false -ErrorAction Stop
-          & $WriteLog "Wi‑Fi adapter enabled: $($adapter.Name)"
+          & $WriteLog "Wi-Fi adapter enabled: $($adapter.Name)"
         } catch {
-          & $WriteLog "Failed to enable Wi‑Fi adapter $($adapter.Name): $($_.Exception.Message)"
+          & $WriteLog "Failed to enable Wi-Fi adapter $($adapter.Name): $($_.Exception.Message)"
         }
       } else {
-        & $WriteLog "Wi‑Fi adapter already enabled: $($adapter.Name)"
+        & $WriteLog "Wi-Fi adapter already enabled: $($adapter.Name)"
       }
     }
   }
